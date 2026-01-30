@@ -91,52 +91,31 @@ class YouTubeService:
             languages = ["en"]
 
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-
-            # Try to get transcript in preferred language
-            transcript = None
-            for lang in languages:
-                try:
-                    transcript = transcript_list.find_transcript([lang])
-                    break
-                except NoTranscriptFound:
-                    continue
-
-            # Fall back to any available transcript
-            if transcript is None:
-                try:
-                    transcript = transcript_list.find_generated_transcript(languages)
-                except NoTranscriptFound:
-                    # Get first available
-                    for t in transcript_list:
-                        transcript = t
-                        break
-
-            if transcript is None:
-                raise ValueError(f"No transcript available for video {video_id}")
-
-            # Fetch the actual transcript data
-            data = transcript.fetch()
+            # Create API instance and fetch transcript (new API in v1.x)
+            api = YouTubeTranscriptApi()
+            fetched = api.fetch(video_id, languages=tuple(languages))
 
             segments = [
                 TranscriptSegment(
-                    text=entry["text"],
-                    start=entry["start"],
-                    duration=entry["duration"],
+                    text=entry.text,
+                    start=entry.start,
+                    duration=entry.duration,
                 )
-                for entry in data
+                for entry in fetched
             ]
 
             return YouTubeTranscript(
                 video_id=video_id,
                 segments=segments,
-                language=transcript.language_code,
+                language=languages[0] if languages else "en",
             )
 
         except VideoUnavailable as e:
             raise ValueError(f"Video unavailable: {video_id}") from e
         except TranscriptsDisabled as e:
             raise ValueError(f"Transcripts disabled for video: {video_id}") from e
+        except NoTranscriptFound as e:
+            raise ValueError(f"No transcript found for video: {video_id}") from e
         except Exception as e:
             raise ValueError(f"Failed to fetch transcript: {e}") from e
 
