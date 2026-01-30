@@ -47,10 +47,16 @@ class ChunkingService:
             if chunk:  # Only add non-empty chunks
                 chunks.append(chunk)
 
-            # Move start position, accounting for overlap
-            start = end - self.overlap
-            if start >= end:
+            # If we've reached the end, stop
+            if end >= len(text):
                 break
+
+            # Move start position, accounting for overlap
+            new_start = end - self.overlap
+            # Ensure we make progress (at least 1 character forward)
+            if new_start <= start:
+                new_start = start + 1
+            start = new_start
 
         return chunks
 
