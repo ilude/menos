@@ -24,6 +24,16 @@ class YouTubeIngestRequest(BaseModel):
     generate_embeddings: bool = True
 
 
+class YouTubeUploadRequest(BaseModel):
+    """Request to upload a pre-fetched YouTube transcript."""
+
+    video_id: str
+    transcript_text: str
+    timestamped_text: str | None = None
+    language: str = "en"
+    generate_embeddings: bool = True
+
+
 class YouTubeIngestResponse(BaseModel):
     """Response after ingesting a video."""
 
@@ -116,6 +126,76 @@ async def ingest_video(
         video_id=video_id,
         title=f"YouTube: {video_id}",
         transcript_length=len(transcript.full_text),
+        chunks_created=chunks_created,
+        file_path=file_path,
+    )
+
+
+@router.post("/upload", response_model=YouTubeIngestResponse)
+async def upload_transcript(
+    body: YouTubeUploadRequest,
+    key_id: AuthenticatedKeyId,
+    minio_storage: MinIOStorage = Depends(get_minio_storage),
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+):
+    """Upload a pre-fetched YouTube transcript.
+
+    Use this when the server cannot fetch transcripts directly (IP blocked).
+    Client fetches the transcript locally and uploads it here.
+    """
+    video_id = body.video_id
+    content_to_store = body.timestamped_text or body.transcript_text
+    file_path = f"youtube/{video_id}/transcript.txt"
+
+    # Upload transcript to MinIO
+    file_data = io.BytesIO(content_to_store.encode("utf-8"))
+    file_size = await minio_storage.upload(file_path, file_data, "text/plain")
+
+    # Create metadata in SurrealDB
+    metadata = ContentMetadata(
+        content_type="youtube",
+        title=f"YouTube: {video_id}",
+        mime_type="text/plain",
+        file_size=file_size,
+        file_path=file_path,
+        author=key_id,
+        metadata={
+            "video_id": video_id,
+            "language": body.language,
+        },
+    )
+    created = await surreal_repo.create_content(metadata)
+    content_id = created.id or video_id
+
+    # Chunk the transcript and create embeddings
+    chunks_created = 0
+    if body.generate_embeddings:
+        chunking_service = ChunkingService(chunk_size=512, overlap=50)
+        text_chunks = chunking_service.chunk_text(body.transcript_text)
+
+        for i, chunk_text in enumerate(text_chunks):
+            # Generate embedding
+            try:
+                embedding = await embedding_service.embed(chunk_text)
+            except Exception:
+                embedding = None
+
+            # Store chunk
+            chunk = ChunkModel(
+                content_id=content_id,
+                text=chunk_text,
+                chunk_index=i,
+                embedding=embedding,
+            )
+            await surreal_repo.create_chunk(chunk)
+            chunks_created += 1
+
+    return YouTubeIngestResponse(
+        id=content_id,
+        video_id=video_id,
+        title=f"YouTube: {video_id}",
+        transcript_length=len(body.transcript_text),
         chunks_created=chunks_created,
         file_path=file_path,
     )
