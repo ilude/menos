@@ -7,13 +7,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project files
 COPY pyproject.toml .
-COPY src/ src/
+COPY menos/ menos/
 
 # Install dependencies
 RUN uv pip install --system -e .
-
-# Create data directory
-RUN mkdir -p /data
 
 EXPOSE 8000
 

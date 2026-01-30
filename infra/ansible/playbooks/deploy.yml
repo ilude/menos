@@ -1,0 +1,68 @@
+---
+- name: Deploy menos stack
+  hosts: menos
+  become: true
+
+  tasks:
+    - name: Create deploy directory
+      ansible.builtin.file:
+        path: "{{ deploy_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create data directories
+      ansible.builtin.file:
+        path: "{{ data_path }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - surrealdb
+        - minio
+        - ollama
+        - keys
+
+    - name: Sync compose files
+      ansible.builtin.copy:
+        src: "../files/menos/"
+        dest: "{{ deploy_path }}/"
+        mode: "0644"
+
+    - name: Sync API source
+      ansible.builtin.copy:
+        src: "../../../../api/"
+        dest: "{{ deploy_path }}/api/"
+        mode: "0644"
+
+    - name: Copy .env file
+      ansible.builtin.copy:
+        src: "{{ lookup('env', 'ENV_FILE') | default('../../../.env', true) }}"
+        dest: "{{ deploy_path }}/.env"
+        mode: "0600"
+      when: lookup('env', 'ENV_FILE') != '' or lookup('file', '../../../.env', errors='ignore') != ''
+
+    - name: Pull container images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Start services
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Wait for services to be healthy
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Show service status
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ deploy_path }}"
+      register: compose_status
+      changed_when: false
+
+    - name: Display status
+      ansible.builtin.debug:
+        var: compose_status.stdout_lines

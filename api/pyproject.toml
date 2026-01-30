@@ -1,16 +1,18 @@
 [project]
-name = "menos"
+name = "menos-api"
 version = "0.1.0"
-description = "YouTube transcript store service"
+description = "Menos content vault API"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "httpx>=0.28.0",
-    "youtube-transcript-api>=0.6.3",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    "aiosqlite>=0.20.0",
+    "cryptography>=44.0.0",
+    "http-message-signatures>=0.5.0",
+    "minio>=7.2.0",
+    "surrealdb>=0.4.0",
 ]
 
 [project.optional-dependencies]
@@ -30,8 +32,3 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-
-[dependency-groups]
-dev = [
-    "ruff>=0.14.14",
-]

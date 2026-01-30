@@ -1,0 +1,134 @@
+"""Shared test fixtures."""
+
+import tempfile
+from pathlib import Path
+
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
+from fastapi.testclient import TestClient
+
+from menos.client.signer import RequestSigner
+
+
+@pytest.fixture
+def ed25519_keypair():
+    """Generate ephemeral ed25519 keypair for testing."""
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    return private_key, public_key
+
+
+@pytest.fixture
+def request_signer(ed25519_keypair):
+    """Create a RequestSigner from test keypair."""
+    private_key, _ = ed25519_keypair
+    return RequestSigner.from_private_key(private_key)
+
+
+@pytest.fixture
+def keys_dir(ed25519_keypair):
+    """Create temp directory with authorized_keys file."""
+    _, public_key = ed25519_keypair
+
+    # Get OpenSSH format public key
+    public_ssh = public_key.public_bytes(
+        encoding=Encoding.OpenSSH,
+        format=PublicFormat.OpenSSH,
+    ).decode()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        keys_path = Path(tmpdir)
+        auth_keys = keys_path / "authorized_keys"
+        auth_keys.write_text(f"{public_ssh} test@localhost\n")
+        yield keys_path
+
+
+@pytest.fixture
+def private_key_file(ed25519_keypair):
+    """Create temp file with private key in OpenSSH format."""
+    private_key, _ = ed25519_keypair
+
+    private_ssh = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.OpenSSH,
+        encryption_algorithm=NoEncryption(),
+    )
+
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".key", delete=False) as f:
+        f.write(private_ssh)
+        f.flush()
+        yield Path(f.name)
+
+
+@pytest.fixture
+def app_with_keys(keys_dir, monkeypatch):
+    """Create FastAPI app with test keys configured."""
+    monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
+
+    # Reset the key store singleton
+    import menos.auth.dependencies as deps
+    deps._key_store = None
+
+    # Reload settings with new env
+    from menos.config import Settings
+    monkeypatch.setattr("menos.config.settings", Settings())
+    monkeypatch.setattr("menos.auth.dependencies.settings", Settings())
+
+    from menos.main import app
+    return app
+
+
+@pytest.fixture
+def client(app_with_keys):
+    """TestClient with auth keys configured."""
+    return TestClient(app_with_keys)
+
+
+@pytest.fixture
+def authed_client(client, request_signer):
+    """TestClient wrapper that auto-signs requests."""
+    return AuthedTestClient(client, request_signer)
+
+
+class AuthedTestClient:
+    """TestClient wrapper that signs requests."""
+
+    def __init__(self, client: TestClient, signer: RequestSigner):
+        self.client = client
+        self.signer = signer
+
+    def get(self, path: str, **kwargs):
+        headers = self.signer.sign_request("GET", path, host="testserver")
+        kwargs.setdefault("headers", {}).update(headers)
+        return self.client.get(path, **kwargs)
+
+    def post(self, path: str, **kwargs):
+        body = kwargs.get("content") or b""
+        if kwargs.get("json"):
+            import json
+            body = json.dumps(kwargs["json"]).encode()
+            # TestClient needs content, not json, when we provide content-digest
+            kwargs["content"] = body
+            kwargs.pop("json")
+            kwargs.setdefault("headers", {})["content-type"] = "application/json"
+        sig_body = body if body else None
+        headers = self.signer.sign_request("POST", path, body=sig_body, host="testserver")
+        kwargs.setdefault("headers", {}).update(headers)
+        return self.client.post(path, **kwargs)
+
+    def put(self, path: str, **kwargs):
+        body = kwargs.get("content") or b""
+        headers = self.signer.sign_request("PUT", path, body=body, host="testserver")
+        kwargs.setdefault("headers", {}).update(headers)
+        return self.client.put(path, **kwargs)
+
+    def delete(self, path: str, **kwargs):
+        headers = self.signer.sign_request("DELETE", path, host="testserver")
+        kwargs.setdefault("headers", {}).update(headers)
+        return self.client.delete(path, **kwargs)

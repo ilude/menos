@@ -1,0 +1,68 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: menos-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${DATA_PATH:-/data/menos}/ollama:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    container_name: menos-surrealdb
+    ports:
+      - "8080:8000"
+    volumes:
+      - ${DATA_PATH:-/data/menos}/surrealdb:/data
+    command: start --user root --pass ${SURREALDB_PASSWORD} file:/data/database.db
+    environment:
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: menos-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ${DATA_PATH:-/data/menos}/minio:/data
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    restart: unless-stopped
+
+  menos-api:
+    build: ./api
+    container_name: menos-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - surrealdb
+      - minio
+      - ollama
+    environment:
+      - SURREALDB_URL=http://surrealdb:8000
+      - SURREALDB_USER=root
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minio}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - OLLAMA_URL=http://ollama:11434
+      - SSH_PUBLIC_KEYS_PATH=/keys
+    volumes:
+      - ${DATA_PATH:-/data/menos}/keys:/keys:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    name: menos-network

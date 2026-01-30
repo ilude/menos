@@ -1,0 +1,12 @@
+services:
+  ansible:
+    build: .
+    volumes:
+      - .:/ansible:ro
+      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent:ro
+      - ~/.ssh:/root/.ssh:ro
+    environment:
+      - SSH_AUTH_SOCK=/ssh-agent
+      - ANSIBLE_HOST_KEY_CHECKING=False
+    working_dir: /ansible
+    entrypoint: ["ansible-playbook"]
