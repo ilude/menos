@@ -1,19 +1,23 @@
-.PHONY: deploy update backup shell build logs status test lint
+.PHONY: deploy update backup reboot shell build logs status test lint
 
 # Ansible container commands
 ANSIBLE_CMD = docker compose -f infra/ansible/docker-compose.yml run --rm ansible
 
 # Full deploy: sync files, pull images, start services
 deploy:
-	$(ANSIBLE_CMD) playbooks/deploy.yml
+	$(ANSIBLE_CMD) ansible-playbook playbooks/deploy.yml
 
 # Quick update: pull latest images and restart
 update:
-	$(ANSIBLE_CMD) playbooks/update.yml
+	$(ANSIBLE_CMD) ansible-playbook playbooks/update.yml
 
 # Backup current server config
 backup:
-	$(ANSIBLE_CMD) playbooks/backup.yml
+	$(ANSIBLE_CMD) ansible-playbook playbooks/backup.yml
+
+# Reboot remote server (fixes nvidia driver mismatch)
+reboot:
+	$(ANSIBLE_CMD) ansible-playbook playbooks/reboot.yml
 
 # Interactive shell in Ansible container
 shell:

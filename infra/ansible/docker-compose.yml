@@ -1,12 +1,20 @@
 services:
   ansible:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: root
     volumes:
-      - .:/ansible:ro
-      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent:ro
-      - ~/.ssh:/root/.ssh:ro
-    environment:
-      - SSH_AUTH_SOCK=/ssh-agent
-      - ANSIBLE_HOST_KEY_CHECKING=False
+      # Mount SSH keys to temp location (entrypoint copies with correct perms)
+      - ${HOME:-${USERPROFILE}}/.ssh:/mnt/ssh:ro
+      # Mount ansible playbooks and config
+      - ./:/ansible:rw
+      # Mount project root for access to .env and api/
+      - ../..:/project:ro
     working_dir: /ansible
-    entrypoint: ["ansible-playbook"]
+    environment:
+      - ANSIBLE_CONFIG=/ansible/ansible.cfg
+      - ANSIBLE_HOST_KEY_CHECKING=False
+    stdin_open: true
+    tty: true
+    network_mode: host

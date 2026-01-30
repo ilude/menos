@@ -21,28 +21,81 @@
         - ollama
         - keys
 
+    - name: Find ed25519 public keys
+      ansible.builtin.find:
+        paths: /mnt/ssh
+        patterns: "*.pub"
+      delegate_to: localhost
+      become: false
+      register: pub_keys
+
+    - name: Read ed25519 public keys
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      delegate_to: localhost
+      become: false
+      loop: "{{ pub_keys.files }}"
+      register: key_contents
+      when: pub_keys.files | length > 0
+
+    - name: Deploy authorized_keys for API auth
+      ansible.builtin.copy:
+        content: |
+          # Authorized keys for menos API authentication
+          # Deployed by Ansible
+          {% for key in key_contents.results %}
+          {% if key.content is defined and (key.content | b64decode | trim).startswith('ssh-ed25519') %}
+          {{ key.content | b64decode | trim }}
+          {% endif %}
+          {% endfor %}
+        dest: "{{ data_path }}/keys/authorized_keys"
+        mode: "0644"
+      when: key_contents.results is defined
+
+    - name: Set SurrealDB directory ownership
+      ansible.builtin.file:
+        path: "{{ data_path }}/surrealdb"
+        owner: "65532"
+        group: "65532"
+        recurse: true
+
     - name: Sync compose files
       ansible.builtin.copy:
         src: "../files/menos/"
         dest: "{{ deploy_path }}/"
         mode: "0644"
 
-    - name: Sync API source
+    - name: Create API directory
+      ansible.builtin.file:
+        path: "{{ deploy_path }}/api"
+        state: directory
+        mode: "0755"
+
+    - name: Sync API source files
       ansible.builtin.copy:
-        src: "../../../../api/"
+        src: "/project/api/{{ item }}"
         dest: "{{ deploy_path }}/api/"
         mode: "0644"
+      loop:
+        - menos/
+        - pyproject.toml
+        - Dockerfile
 
     - name: Copy .env file
       ansible.builtin.copy:
-        src: "{{ lookup('env', 'ENV_FILE') | default('../../../.env', true) }}"
+        src: "/project/.env"
         dest: "{{ deploy_path }}/.env"
         mode: "0600"
-      when: lookup('env', 'ENV_FILE') != '' or lookup('file', '../../../.env', errors='ignore') != ''
 
     - name: Pull container images
       ansible.builtin.command:
         cmd: docker compose pull
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Build API image
+      ansible.builtin.command:
+        cmd: docker compose build menos-api
         chdir: "{{ deploy_path }}"
       changed_when: true
 

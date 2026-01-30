@@ -1,13 +1,25 @@
 FROM python:3.12-slim
 
-# Install Ansible and dependencies
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-client \
+    rsync \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Ansible
 RUN pip install --no-cache-dir \
     ansible-core \
-    docker \
     && rm -rf /root/.cache
 
-# Create working directory
+# Set up working directory
 WORKDIR /ansible
 
-# Default command
-ENTRYPOINT ["ansible-playbook"]
+# Copy ansible config
+COPY ansible.cfg /etc/ansible/ansible.cfg
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["ansible", "--version"]
