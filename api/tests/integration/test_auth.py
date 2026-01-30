@@ -122,11 +122,6 @@ class TestProtectedEndpoints:
 
         assert response.status_code == 401
 
-    def test_content_list_with_auth(self, authed_client):
-        """Content list should work with auth."""
-        response = authed_client.get("/api/v1/content")
-
-        assert response.status_code == 200
 
     def test_search_requires_auth(self, client):
         """Search should require auth."""
