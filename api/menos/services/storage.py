@@ -90,21 +90,34 @@ class MinIOStorage:
 class SurrealDBRepository:
     """SurrealDB client wrapper for metadata storage."""
 
-    def __init__(self, db: Surreal, namespace: str, database: str):
+    def __init__(
+        self,
+        db: Surreal,
+        namespace: str,
+        database: str,
+        username: str = "root",
+        password: str = "root",
+    ):
         """Initialize SurrealDB repository.
 
         Args:
             db: Surreal database connection
             namespace: Database namespace
             database: Database name
+            username: Database username
+            password: Database password
         """
         self.db = db
         self.namespace = namespace
         self.database = database
+        self.username = username
+        self.password = password
 
     async def connect(self) -> None:
-        """Connect to database and select namespace/database."""
-        # SurrealDB SDK initialization - use method to set namespace/database
+        """Connect to database, authenticate, and select namespace/database."""
+        # Authenticate with credentials
+        self.db.signin({"username": self.username, "password": self.password})
+        # Select namespace and database
         self.db.use(self.namespace, self.database)
 
     async def create_content(self, metadata: ContentMetadata) -> ContentMetadata:
@@ -123,7 +136,7 @@ class SurrealDBRepository:
         metadata.created_at = now
         metadata.updated_at = now
 
-        result = await self.db.create("content", metadata.model_dump(exclude_none=True))
+        result = self.db.create("content", metadata.model_dump(exclude_none=True))
         if result:
             metadata.id = result[0]["id"].split(":")[-1]
         return metadata
@@ -137,7 +150,7 @@ class SurrealDBRepository:
         Returns:
             Content metadata or None if not found
         """
-        result = await self.db.select(f"content:{content_id}")
+        result = self.db.select(f"content:{content_id}")
         if result:
             return ContentMetadata(**result[0])
         return None
@@ -162,7 +175,7 @@ class SurrealDBRepository:
         if content_type:
             where_clause = f" WHERE content_type = '{content_type}'"
 
-        result = await self.db.query(
+        result = self.db.query(
             f"SELECT * FROM content{where_clause} LIMIT {limit} OFFSET {offset}"
         )
         if result and result[0].get("result"):
@@ -184,7 +197,7 @@ class SurrealDBRepository:
             Exception: If update fails
         """
         metadata.updated_at = datetime.now(UTC)
-        result = await self.db.update(f"content:{content_id}", metadata.model_dump(exclude_none=True))
+        result = self.db.update(f"content:{content_id}", metadata.model_dump(exclude_none=True))
         if result:
             return ContentMetadata(**result[0])
         raise RuntimeError(f"Failed to update content {content_id}")
@@ -195,7 +208,7 @@ class SurrealDBRepository:
         Args:
             content_id: Content ID
         """
-        await self.db.delete(f"content:{content_id}")
+        self.db.delete(f"content:{content_id}")
 
     async def create_chunk(self, chunk: ChunkModel) -> ChunkModel:
         """Create content chunk.
@@ -207,7 +220,7 @@ class SurrealDBRepository:
             Created chunk with ID
         """
         chunk.created_at = datetime.now(UTC)
-        result = await self.db.create("chunk", chunk.model_dump(exclude_none=True))
+        result = self.db.create("chunk", chunk.model_dump(exclude_none=True))
         if result:
             chunk.id = result[0]["id"].split(":")[-1]
         return chunk
@@ -221,7 +234,7 @@ class SurrealDBRepository:
         Returns:
             List of chunks
         """
-        result = await self.db.query(f"SELECT * FROM chunk WHERE content_id = '{content_id}'")
+        result = self.db.query(f"SELECT * FROM chunk WHERE content_id = '{content_id}'")
         if result and result[0].get("result"):
             return [ChunkModel(**item) for item in result[0]["result"]]
         return []
@@ -232,4 +245,4 @@ class SurrealDBRepository:
         Args:
             content_id: Content ID
         """
-        await self.db.query(f"DELETE FROM chunk WHERE content_id = '{content_id}'")
+        self.db.query(f"DELETE FROM chunk WHERE content_id = '{content_id}'")

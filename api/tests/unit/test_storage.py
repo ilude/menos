@@ -93,7 +93,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_create_content(self):
         """Test content creation."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db.create.return_value = [{"id": "content:test123"}]
 
         repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
@@ -114,7 +114,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_get_content(self):
         """Test getting content by ID."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db.select.return_value = [
             {
                 "id": "content:test123",
@@ -135,7 +135,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_get_content_not_found(self):
         """Test getting non-existent content."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db.select.return_value = []
 
         repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
@@ -146,7 +146,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_list_content(self):
         """Test listing content."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db.query.return_value = [
             {
                 "result": [
@@ -178,7 +178,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_delete_content(self):
         """Test content deletion."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
 
         await repo.delete_content("test123")
@@ -188,7 +188,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_create_chunk(self):
         """Test chunk creation."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db.create.return_value = [{"id": "chunk:xyz"}]
 
         repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
@@ -206,7 +206,7 @@ class TestSurrealDBRepository:
     @pytest.mark.asyncio
     async def test_get_chunks(self):
         """Test getting chunks for content."""
-        mock_db = AsyncMock()
+        mock_db = MagicMock()
         mock_db.query.return_value = [
             {
                 "result": [

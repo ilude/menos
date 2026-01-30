@@ -32,13 +32,15 @@ async def get_storage_context() -> AsyncGenerator[tuple[MinIOStorage, SurrealDBR
         db,
         settings.surrealdb_namespace,
         settings.surrealdb_database,
+        settings.surrealdb_user,
+        settings.surrealdb_password,
     )
 
     try:
         await surreal_repo.connect()
         yield minio_storage, surreal_repo
     finally:
-        await db.close()
+        db.close()
 
 
 async def get_minio_storage() -> MinIOStorage:
@@ -59,6 +61,8 @@ async def get_surreal_repo() -> SurrealDBRepository:
         db,
         settings.surrealdb_namespace,
         settings.surrealdb_database,
+        settings.surrealdb_user,
+        settings.surrealdb_password,
     )
     await repo.connect()
     return repo
