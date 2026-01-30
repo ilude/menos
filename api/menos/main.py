@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from menos.routers import auth, content, health, search
+from menos.routers import auth, content, health, search, youtube
 
 
 @asynccontextmanager
@@ -32,3 +32,4 @@ app.include_router(auth.router, prefix="/api/v1")
 # Protected endpoints
 app.include_router(content.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
+app.include_router(youtube.router, prefix="/api/v1")
