@@ -1,112 +1,138 @@
 # Menos
 
-YouTube transcript store service. Centralized storage for YouTube video transcripts and metadata, accessible from multiple machines.
+Self-hosted content vault with semantic search. Centralized store for markdown/frontmatter files and structured data accessible from multiple machines.
 
 ## Status
 
-**MVP / Proof of Concept** - Core scaffolding complete, not yet tested.
-
-## Features
-
-- Fetch and store YouTube transcripts (via youtube-transcript-api with Webshare proxy)
-- Fetch and store video metadata (via YouTube Data API)
-- Full-text search across all transcripts (SQLite FTS5)
-- REST API for remote access
-- Client-side summary generation (keeps API keys centralized on server)
+**Phase 0 Complete** - Infrastructure scaffold ready, API stub implemented.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              Menos Service (Docker)                          │
-│                                                              │
-│  FastAPI + SQLite + FTS5                                    │
-│                                                              │
-│  POST /api/v1/videos/{id}     → fetch & store               │
-│  GET  /api/v1/videos/{id}     → retrieve                    │
-│  GET  /api/v1/videos          → list with filters           │
-│  GET  /api/v1/search?q=       → full-text search            │
-│  PUT  /api/v1/videos/{id}/summary → store summary           │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  REST API       │────▶│  SurrealDB      │────▶│  HNSW Vector    │
+│  (FastAPI)      │     │  (metadata +    │     │  Index          │
+│                 │     │   embeddings)   │     │                 │
+└────────┬────────┘     └─────────────────┘     └─────────────────┘
+         │
+         │              ┌─────────────────┐     ┌─────────────────┐
+         └─────────────▶│  MinIO          │     │  Ollama         │
+                        │  (file storage) │     │  (mxbai-embed)  │
+                        └─────────────────┘     └─────────────────┘
 ```
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| **SurrealDB** | Metadata + vector search (HNSW indexes) |
+| **MinIO** | S3-compatible file storage |
+| **Ollama** | Local embeddings (mxbai-embed-large) |
+| **FastAPI** | REST API with RFC 9421 HTTP signature auth |
+
+## Authentication
+
+Uses [RFC 9421 HTTP Message Signatures](https://datatracker.ietf.org/doc/rfc9421/) with ed25519 keys.
+
+1. Register your SSH public key with the service
+2. Sign requests with your private key
+3. Server verifies signature against registered public key
+
+Your existing `~/.ssh/id_ed25519` key works directly.
 
 ## Quick Start
 
-### Prerequisites
-
-- Docker & Docker Compose
-- YouTube Data API key
-- Webshare proxy credentials (for transcript fetching)
-
-### Run with Docker
+### Local Development
 
 ```bash
-# Copy and edit environment
-cp .env.example .env
-# Edit .env with your API keys
+# Start infrastructure
+make dev
 
-# Start service
-docker compose up -d
+# Check status
+make status
 
-# Test
-curl http://localhost:8420/health
+# View logs
+make dev-logs
+
+# Stop
+make dev-down
 ```
 
-### Development
+### Remote Deployment
 
 ```bash
-# Install dependencies
-uv sync
+# Set target host
+export MENOS_HOST=your-server.com
 
-# Run locally
-uv run uvicorn menos.main:app --reload
+# Build Ansible container
+make build
 
-# Run tests
-uv run pytest
+# Deploy full stack
+make deploy
+
+# Quick update (pull + restart)
+make update
+
+# Backup current config
+make backup
 ```
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/videos/{video_id}` | Fetch and store video |
-| GET | `/api/v1/videos/{video_id}` | Get video details |
-| GET | `/api/v1/videos/{video_id}/transcript` | Get transcript only |
-| PUT | `/api/v1/videos/{video_id}/summary` | Store client-generated summary |
-| DELETE | `/api/v1/videos/{video_id}` | Delete video |
-| GET | `/api/v1/videos` | List videos (optional: `?channel=`) |
-| GET | `/api/v1/search?q=` | Full-text search |
-| GET | `/health` | Health check |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/health` | No | Health check |
+| GET | `/ready` | No | Readiness check |
+| GET | `/api/v1/auth/keys` | No | List authorized key IDs |
+| GET | `/api/v1/auth/whoami` | Yes | Verify authentication |
+| POST | `/api/v1/auth/keys/reload` | Yes | Reload keys from disk |
+| GET | `/api/v1/content` | Yes | List content |
+| GET | `/api/v1/content/{id}` | Yes | Get content |
+| POST | `/api/v1/content` | Yes | Upload content |
+| DELETE | `/api/v1/content/{id}` | Yes | Delete content |
+| POST | `/api/v1/search` | Yes | Semantic vector search |
 
-## Client Usage
+## Project Structure
 
-The `/yt` command in Claude Code can be updated to use this service:
-
-```python
-# Instead of local fetching:
-response = httpx.post(f"{MENOS_URL}/api/v1/videos/{video_id}")
-video = response.json()
-
-# Summary generated client-side, then stored:
-httpx.put(f"{MENOS_URL}/api/v1/videos/{video_id}/summary", json={"summary": summary})
+```
+menos/
+├── api/                    # FastAPI application
+│   ├── menos/
+│   │   ├── auth/           # RFC 9421 signature verification
+│   │   ├── routers/        # API endpoints
+│   │   └── services/       # SurrealDB, MinIO, Ollama clients
+│   ├── Dockerfile
+│   └── pyproject.toml
+├── infra/
+│   └── ansible/            # Deployment automation
+│       ├── files/menos/    # Remote compose stack
+│       ├── inventory/      # Server configuration
+│       └── playbooks/      # Deploy, update, backup
+├── docs/                   # Documentation
+├── _archive/               # Previous implementations
+└── Makefile                # Dev and deploy commands
 ```
 
 ## Configuration
 
+Environment variables (set in `.env`):
+
 | Variable | Description |
 |----------|-------------|
-| `YOUTUBE_API_KEY` | YouTube Data API key |
-| `WEBSHARE_PROXY_USERNAME` | Webshare proxy username |
-| `WEBSHARE_PROXY_PASSWORD` | Webshare proxy password |
-| `DATABASE_PATH` | SQLite database path (default: `/data/menos.db`) |
+| `SURREALDB_PASSWORD` | SurrealDB root password |
+| `MINIO_ROOT_USER` | MinIO admin username |
+| `MINIO_ROOT_PASSWORD` | MinIO admin password |
+| `DATA_PATH` | Data directory (default: `/data/menos`) |
 
-## Future Enhancements
+## Implementation Status
 
-- [ ] Authentication (API key or mTLS)
-- [ ] Semantic search (mgrep or local embeddings)
-- [ ] Batch import from existing `/yt` logs
-- [ ] Channel subscriptions / auto-fetch
-- [ ] Server-side summary generation (Claude API)
+- [x] Phase -1: Archive v0 scaffold
+- [x] Phase 0: Infrastructure (Ansible, Compose, Makefile)
+- [x] Phase 1: API scaffold with RFC 9421 auth
+- [ ] Phase 2: Storage (MinIO + SurrealDB integration)
+- [ ] Phase 3: Search (Ollama embeddings + HNSW)
+- [ ] Phase 4: YouTube migration
+- [ ] Phase 5: Agentic search
 
 ## License
 

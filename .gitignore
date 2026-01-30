@@ -5,3 +5,4 @@ __pycache__/
 *.db
 data/
 .ruff_cache/
+.pytest_cache/
