@@ -1,6 +1,6 @@
 """Unit tests for embedding service."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,8 +22,10 @@ class TestEmbeddingService:
         """Test embedding generation."""
         service = EmbeddingService("http://localhost:11434", "mxbai-embed-large")
 
-        mock_response = AsyncMock()
+        # response.json() is synchronous in httpx, so use MagicMock for response
+        mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
@@ -37,28 +39,29 @@ class TestEmbeddingService:
     @pytest.mark.asyncio
     async def test_embed_batch(self):
         """Test batch embedding generation."""
-        with patch("menos.services.embeddings.httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value = mock_client
+        service = EmbeddingService("http://localhost:11434", "mxbai-embed-large")
 
-            mock_response = AsyncMock()
-            mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
-            mock_client.post.return_value = mock_response
+        # response.json() is synchronous in httpx, so use MagicMock for response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        mock_response.raise_for_status = MagicMock()
 
-            service = EmbeddingService("http://localhost:11434", "mxbai-embed-large")
-            results = await service.embed_batch(["text1", "text2"])
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+        service.client = mock_client
 
-            assert len(results) == 2
-            assert all(r == [0.1, 0.2, 0.3] for r in results)
+        results = await service.embed_batch(["text1", "text2"])
+
+        assert len(results) == 2
+        assert all(r == [0.1, 0.2, 0.3] for r in results)
 
     @pytest.mark.asyncio
     async def test_close(self):
         """Test client close."""
-        with patch("menos.services.embeddings.httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value = mock_client
+        service = EmbeddingService("http://localhost:11434", "mxbai-embed-large")
+        mock_client = AsyncMock()
+        service.client = mock_client
 
-            service = EmbeddingService("http://localhost:11434", "mxbai-embed-large")
-            await service.close()
+        await service.close()
 
-            mock_client.aclose.assert_called_once()
+        mock_client.aclose.assert_called_once()
