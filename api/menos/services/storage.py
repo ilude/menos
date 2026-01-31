@@ -138,7 +138,14 @@ class SurrealDBRepository:
 
         result = self.db.create("content", metadata.model_dump(exclude_none=True))
         if result:
-            metadata.id = result[0]["id"].split(":")[-1]
+            # Handle both dict (new) and list (old) return types
+            record = result[0] if isinstance(result, list) else result
+            record_id = record["id"]
+            # Handle RecordID object or string
+            if hasattr(record_id, "record_id"):
+                metadata.id = str(record_id.record_id)
+            else:
+                metadata.id = str(record_id).split(":")[-1]
         return metadata
 
     async def get_content(self, content_id: str) -> ContentMetadata | None:
@@ -176,10 +183,22 @@ class SurrealDBRepository:
             where_clause = f" WHERE content_type = '{content_type}'"
 
         result = self.db.query(
-            f"SELECT * FROM content{where_clause} LIMIT {limit} OFFSET {offset}"
+            f"SELECT * FROM content{where_clause} LIMIT {limit} START {offset}"
         )
-        if result and result[0].get("result"):
-            items = [ContentMetadata(**item) for item in result[0]["result"]]
+        # SurrealDB v2 returns results directly as a list
+        if result and isinstance(result, list) and len(result) > 0:
+            # Handle both old format (wrapped in result key) and new format (direct list)
+            if isinstance(result[0], dict) and "result" in result[0]:
+                raw_items = result[0]["result"]
+            else:
+                raw_items = result
+            # Convert RecordID objects to strings
+            items = []
+            for item in raw_items:
+                item_copy = dict(item)
+                if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                    item_copy["id"] = item_copy["id"].id
+                items.append(ContentMetadata(**item_copy))
             return items, len(items)
         return [], 0
 
@@ -222,7 +241,14 @@ class SurrealDBRepository:
         chunk.created_at = datetime.now(UTC)
         result = self.db.create("chunk", chunk.model_dump(exclude_none=True))
         if result:
-            chunk.id = result[0]["id"].split(":")[-1]
+            # Handle both dict (new) and list (old) return types
+            record = result[0] if isinstance(result, list) else result
+            record_id = record["id"]
+            # Handle RecordID object or string
+            if hasattr(record_id, "record_id"):
+                chunk.id = str(record_id.record_id)
+            else:
+                chunk.id = str(record_id).split(":")[-1]
         return chunk
 
     async def get_chunks(self, content_id: str) -> list[ChunkModel]:

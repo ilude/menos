@@ -40,7 +40,8 @@ async def get_storage_context() -> AsyncGenerator[tuple[MinIOStorage, SurrealDBR
         await surreal_repo.connect()
         yield minio_storage, surreal_repo
     finally:
-        db.close()
+        # SurrealDB blocking HTTP client doesn't implement close()
+        pass
 
 
 async def get_minio_storage() -> MinIOStorage:
