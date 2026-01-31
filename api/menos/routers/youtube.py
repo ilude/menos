@@ -1,6 +1,7 @@
 """YouTube ingestion endpoints."""
 
 import io
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -146,27 +147,47 @@ async def upload_transcript(
     """
     video_id = body.video_id
     content_to_store = body.timestamped_text or body.transcript_text
-    file_path = f"youtube/{video_id}/transcript.txt"
+    transcript_path = f"youtube/{video_id}/transcript.txt"
+    metadata_path = f"youtube/{video_id}/metadata.json"
 
     # Upload transcript to MinIO
     file_data = io.BytesIO(content_to_store.encode("utf-8"))
-    file_size = await minio_storage.upload(file_path, file_data, "text/plain")
+    file_size = await minio_storage.upload(transcript_path, file_data, "text/plain")
 
-    # Create metadata in SurrealDB
+    # Create metadata object
     metadata = ContentMetadata(
         content_type="youtube",
         title=f"YouTube: {video_id}",
         mime_type="text/plain",
         file_size=file_size,
-        file_path=file_path,
+        file_path=transcript_path,
         author=key_id,
         metadata={
             "video_id": video_id,
             "language": body.language,
+            "transcript_length": len(body.transcript_text),
         },
     )
+
+    # Save metadata to SurrealDB
     created = await surreal_repo.create_content(metadata)
     content_id = created.id or video_id
+
+    # Also save metadata.json to MinIO
+    metadata_dict = {
+        "id": content_id,
+        "video_id": video_id,
+        "title": metadata.title,
+        "language": body.language,
+        "transcript_length": len(body.transcript_text),
+        "file_size": file_size,
+        "author": key_id,
+        "created_at": created.created_at.isoformat() if created.created_at else None,
+    }
+    metadata_json = json.dumps(metadata_dict, indent=2)
+    await minio_storage.upload(
+        metadata_path, io.BytesIO(metadata_json.encode("utf-8")), "application/json"
+    )
 
     # Chunk the transcript and create embeddings
     chunks_created = 0
@@ -197,7 +218,7 @@ async def upload_transcript(
         title=f"YouTube: {video_id}",
         transcript_length=len(body.transcript_text),
         chunks_created=chunks_created,
-        file_path=file_path,
+        file_path=transcript_path,
     )
 
 

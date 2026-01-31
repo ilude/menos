@@ -1,5 +1,12 @@
 #!/usr/bin/env python
-"""Script to ingest YouTube videos from a list file."""
+"""Script to ingest YouTube videos from a list file.
+
+Uses Webshare proxy to avoid YouTube rate limiting.
+
+Environment variables:
+    WEBSHARE_PROXY_USERNAME - Webshare proxy username
+    WEBSHARE_PROXY_PASSWORD - Webshare proxy password
+"""
 
 import json
 import os
@@ -8,9 +15,28 @@ from pathlib import Path
 
 import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from menos.client.signer import RequestSigner
 from menos.services.youtube import TranscriptSegment, YouTubeService, YouTubeTranscript
+
+
+def load_secrets_file() -> None:
+    """Load secrets from ~/.dotfiles/.secrets if env vars not set."""
+    secrets_path = Path.home() / ".dotfiles" / ".secrets"
+    if not secrets_path.exists():
+        return
+
+    for line in secrets_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
+        if match:
+            name, value = match.groups()
+            value = value.strip("'\"")
+            if name not in os.environ:
+                os.environ[name] = value
 
 
 def extract_url(line: str) -> str | None:
@@ -21,15 +47,25 @@ def extract_url(line: str) -> str | None:
     return None
 
 
-def fetch_transcript_with_cookies(
-    video_id: str, cookies_path: str | None = None
-) -> YouTubeTranscript:
-    """Fetch transcript using cookies if available."""
-    if cookies_path and Path(cookies_path).exists():
-        api = YouTubeTranscriptApi(cookies_path=cookies_path)
-    else:
-        api = YouTubeTranscriptApi()
+def get_transcript_api() -> YouTubeTranscriptApi:
+    """Get YouTube API with proxy if credentials available."""
+    username = os.getenv("WEBSHARE_PROXY_USERNAME")
+    password = os.getenv("WEBSHARE_PROXY_PASSWORD")
 
+    if username and password:
+        print("Using Webshare proxy\n")
+        proxy_config = WebshareProxyConfig(
+            proxy_username=username,
+            proxy_password=password,
+        )
+        return YouTubeTranscriptApi(proxy_config=proxy_config)
+
+    print("No proxy configured (direct connection)\n")
+    return YouTubeTranscriptApi()
+
+
+def fetch_transcript(api: YouTubeTranscriptApi, video_id: str) -> YouTubeTranscript:
+    """Fetch transcript using the API."""
     fetched = api.fetch(video_id, languages=("en",))
     segments = [
         TranscriptSegment(text=entry.text, start=entry.start, duration=entry.duration)
@@ -39,6 +75,9 @@ def fetch_transcript_with_cookies(
 
 
 def main():
+    # Load secrets first
+    load_secrets_file()
+
     # Load private key for signing
     key_path = os.path.expanduser("~/.ssh/id_ed25519")
     signer = RequestSigner.from_file(key_path)
@@ -46,13 +85,8 @@ def main():
     # API endpoint
     base_url = "http://192.168.16.241:8000"
 
-    # Check for cookies file
-    cookies_path = os.path.expanduser("~/.config/menos/cookies.txt")
-    if Path(cookies_path).exists():
-        print(f"Using cookies from: {cookies_path}\n")
-    else:
-        print("No cookies file found. YouTube may block requests.")
-        print(f"To use cookies, export from browser to: {cookies_path}\n")
+    # Get transcript API with proxy support
+    transcript_api = get_transcript_api()
 
     # Initialize YouTube service for video ID extraction
     youtube_service = YouTubeService()
@@ -76,10 +110,10 @@ def main():
             print(f"[{i}/{len(urls)}] Ingesting: {url}")
 
             try:
-                # Extract video ID and fetch transcript locally
+                # Extract video ID and fetch transcript
                 video_id = youtube_service.extract_video_id(url)
-                print(f"    Fetching transcript locally for {video_id}...")
-                transcript = fetch_transcript_with_cookies(video_id, cookies_path)
+                print(f"    Fetching transcript for {video_id}...")
+                transcript = fetch_transcript(transcript_api, video_id)
 
                 # Prepare upload request with pre-fetched transcript
                 body = {
