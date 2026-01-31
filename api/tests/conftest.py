@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -14,6 +15,8 @@ from cryptography.hazmat.primitives.serialization import (
 from fastapi.testclient import TestClient
 
 from menos.client.signer import RequestSigner
+from menos.services.di import get_minio_storage, get_surreal_repo
+from menos.services.embeddings import EmbeddingService, get_embedding_service
 
 
 @pytest.fixture
@@ -67,7 +70,43 @@ def private_key_file(ed25519_keypair):
 
 
 @pytest.fixture
-def app_with_keys(keys_dir, monkeypatch):
+def mock_surreal_repo():
+    """Mock SurrealDB repository."""
+    repo = MagicMock()
+    repo.connect = AsyncMock()
+    repo.list_content = AsyncMock(return_value=([], 0))
+    repo.get_content = AsyncMock(return_value=None)
+    repo.create_content = AsyncMock()
+    repo.delete_content = AsyncMock()
+    repo.get_chunks = AsyncMock(return_value=[])
+    repo.create_chunk = AsyncMock()
+    repo.vector_search = AsyncMock(return_value=[])
+    return repo
+
+
+@pytest.fixture
+def mock_embedding_service():
+    """Mock embedding service."""
+    service = MagicMock(spec=EmbeddingService)
+    service.embed = AsyncMock(return_value=[0.1] * 1024)
+    service.embed_batch = AsyncMock(return_value=[[0.1] * 1024])
+    service.close = AsyncMock()
+    return service
+
+
+@pytest.fixture
+def mock_minio_storage():
+    """Mock MinIO storage."""
+    storage = MagicMock()
+    storage.upload = AsyncMock(return_value=100)
+    storage.download = AsyncMock(return_value=b"test content")
+    storage.delete = AsyncMock()
+    storage.exists = AsyncMock(return_value=True)
+    return storage
+
+
+@pytest.fixture
+def app_with_keys(keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_service, mock_minio_storage):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
 
@@ -81,7 +120,16 @@ def app_with_keys(keys_dir, monkeypatch):
     monkeypatch.setattr("menos.auth.dependencies.settings", Settings())
 
     from menos.main import app
-    return app
+
+    # Override dependencies with mocks
+    app.dependency_overrides[get_surreal_repo] = lambda: mock_surreal_repo
+    app.dependency_overrides[get_embedding_service] = lambda: mock_embedding_service
+    app.dependency_overrides[get_minio_storage] = lambda: mock_minio_storage
+
+    yield app
+
+    # Clean up overrides
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
