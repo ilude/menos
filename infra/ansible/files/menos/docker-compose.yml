@@ -62,6 +62,8 @@ services:
       - MINIO_BUCKET=${MINIO_BUCKET}
       - OLLAMA_URL=http://ollama:11434
       - SSH_PUBLIC_KEYS_PATH=/keys
+      - WEBSHARE_PROXY_USERNAME=${WEBSHARE_PROXY_USERNAME}
+      - WEBSHARE_PROXY_PASSWORD=${WEBSHARE_PROXY_PASSWORD}
     volumes:
       - ${DATA_PATH:-/apps/menos/data}/keys:/keys:ro
     restart: unless-stopped

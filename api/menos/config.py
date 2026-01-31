@@ -32,5 +32,9 @@ class Settings(BaseSettings):
     # Auth
     ssh_public_keys_path: Path = Path("/keys")
 
+    # Webshare Proxy (for YouTube)
+    webshare_proxy_username: str | None = None
+    webshare_proxy_password: str | None = None
+
 
 settings = Settings()

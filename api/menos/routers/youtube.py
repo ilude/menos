@@ -74,9 +74,10 @@ async def ingest_video(
     video_id = youtube_service.extract_video_id(body.url)
     transcript = youtube_service.fetch_transcript(video_id)
 
-    # Prepare file content
+    # Prepare file paths
     timestamped_content = transcript.timestamped_text
     file_path = f"youtube/{video_id}/transcript.txt"
+    metadata_path = f"youtube/{video_id}/metadata.json"
 
     # Upload transcript to MinIO
     file_data = io.BytesIO(timestamped_content.encode("utf-8"))
@@ -98,6 +99,23 @@ async def ingest_video(
     )
     created = await surreal_repo.create_content(metadata)
     content_id = created.id or video_id
+
+    # Save metadata.json to MinIO
+    metadata_dict = {
+        "id": content_id,
+        "video_id": video_id,
+        "title": metadata.title,
+        "language": transcript.language,
+        "segment_count": len(transcript.segments),
+        "transcript_length": len(transcript.full_text),
+        "file_size": file_size,
+        "author": key_id,
+        "created_at": created.created_at.isoformat() if created.created_at else None,
+    }
+    metadata_json = json.dumps(metadata_dict, indent=2)
+    await minio_storage.upload(
+        metadata_path, io.BytesIO(metadata_json.encode("utf-8")), "application/json"
+    )
 
     # Chunk the transcript and create embeddings
     chunks_created = 0

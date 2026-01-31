@@ -9,6 +9,9 @@ from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     VideoUnavailable,
 )
+from youtube_transcript_api.proxies import WebshareProxyConfig
+
+from menos.config import settings
 
 
 @dataclass
@@ -52,6 +55,19 @@ class YouTubeService:
         r"^([0-9A-Za-z_-]{11})$",
     ]
 
+    def __init__(
+        self,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
+    ):
+        """Initialize YouTube service with optional proxy config."""
+        self.proxy_config = None
+        if proxy_username and proxy_password:
+            self.proxy_config = WebshareProxyConfig(
+                proxy_username=proxy_username,
+                proxy_password=proxy_password,
+            )
+
     def extract_video_id(self, url_or_id: str) -> str:
         """Extract video ID from URL or validate ID.
 
@@ -91,8 +107,11 @@ class YouTubeService:
             languages = ["en"]
 
         try:
-            # Create API instance and fetch transcript (new API in v1.x)
-            api = YouTubeTranscriptApi()
+            # Create API instance with optional proxy config
+            if self.proxy_config:
+                api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
+            else:
+                api = YouTubeTranscriptApi()
             fetched = api.fetch(video_id, languages=tuple(languages))
 
             segments = [
@@ -122,4 +141,7 @@ class YouTubeService:
 
 def get_youtube_service() -> YouTubeService:
     """Get YouTube service instance."""
-    return YouTubeService()
+    return YouTubeService(
+        proxy_username=settings.webshare_proxy_username,
+        proxy_password=settings.webshare_proxy_password,
+    )
