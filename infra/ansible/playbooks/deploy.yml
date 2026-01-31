@@ -119,3 +119,11 @@
     - name: Display status
       ansible.builtin.debug:
         var: compose_status.stdout_lines
+
+    - name: Pull Ollama models
+      ansible.builtin.command:
+        cmd: docker exec menos-ollama ollama pull {{ item }}
+      loop:
+        - mxbai-embed-large
+        - qwen3:latest
+      changed_when: true
