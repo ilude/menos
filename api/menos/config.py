@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Ollama
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "mxbai-embed-large"
+    ollama_summary_model: str = "qwen3:latest"
 
     # Auth
     ssh_public_keys_path: Path = Path("/keys")
@@ -35,6 +36,9 @@ class Settings(BaseSettings):
     # Webshare Proxy (for YouTube)
     webshare_proxy_username: str | None = None
     webshare_proxy_password: str | None = None
+
+    # YouTube Data API
+    youtube_api_key: str | None = None
 
 
 settings = Settings()
