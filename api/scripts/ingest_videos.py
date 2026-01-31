@@ -1,31 +1,29 @@
 #!/usr/bin/env python
 """Script to ingest YouTube videos from a list file."""
 
-import sys
-import re
-import httpx
 import json
 import os
+import re
 from pathlib import Path
 
-# Add the api directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent / "api"))
-
+import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from menos.client.signer import RequestSigner
-from menos.services.youtube import YouTubeService, TranscriptSegment, YouTubeTranscript
+from menos.services.youtube import TranscriptSegment, YouTubeService, YouTubeTranscript
 
 
 def extract_url(line: str) -> str | None:
     """Extract YouTube URL from a line."""
-    match = re.search(r'(https?://[^\s]+youtube[^\s]+)', line)
+    match = re.search(r"(https?://[^\s]+youtube[^\s]+)", line)
     if match:
         return match.group(1)
     return None
 
 
-def fetch_transcript_with_cookies(video_id: str, cookies_path: str | None = None) -> YouTubeTranscript:
+def fetch_transcript_with_cookies(
+    video_id: str, cookies_path: str | None = None
+) -> YouTubeTranscript:
     """Fetch transcript using cookies if available."""
     if cookies_path and Path(cookies_path).exists():
         api = YouTubeTranscriptApi(cookies_path=cookies_path)
@@ -59,8 +57,8 @@ def main():
     # Initialize YouTube service for video ID extraction
     youtube_service = YouTubeService()
 
-    # Read videos file
-    videos_file = Path(__file__).parent.parent / "data" / "youtube-videos.txt"
+    # Read videos file (relative to repo root)
+    videos_file = Path(__file__).parent.parent.parent / "data" / "youtube-videos.txt"
     content = videos_file.read_text()
 
     # Extract URLs
@@ -109,7 +107,9 @@ def main():
 
                 if response.status_code == 200:
                     data = response.json()
-                    print(f"    OK: {data.get('video_id')} - {data.get('chunks_created')} chunks")
+                    print(
+                        f"    OK: {data.get('video_id')} - {data.get('chunks_created')} chunks"
+                    )
                 else:
                     print(f"    ERROR {response.status_code}: {response.text[:200]}")
             except Exception as e:
