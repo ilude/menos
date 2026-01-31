@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -12,8 +13,15 @@ from menos.models import ChunkModel, ContentMetadata
 from menos.services.chunking import ChunkingService
 from menos.services.di import get_minio_storage, get_surreal_repo
 from menos.services.embeddings import EmbeddingService, get_embedding_service
+from menos.services.llm import LLMService, get_llm_service
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 from menos.services.youtube import YouTubeService, get_youtube_service
+from menos.services.youtube_metadata import (
+    YouTubeMetadataService,
+    get_youtube_metadata_service,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/youtube", tags=["youtube"])
 
@@ -44,6 +52,7 @@ class YouTubeIngestResponse(BaseModel):
     transcript_length: int
     chunks_created: int
     file_path: str
+    summary: str | None = None
 
 
 class YouTubeVideoInfo(BaseModel):
@@ -64,6 +73,8 @@ async def ingest_video(
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
+    llm_service: LLMService = Depends(get_llm_service),
+    metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
 ):
     """Ingest a YouTube video transcript.
 
@@ -73,6 +84,14 @@ async def ingest_video(
     # Extract video ID and fetch transcript
     video_id = youtube_service.extract_video_id(body.url)
     transcript = youtube_service.fetch_transcript(video_id)
+
+    # Fetch rich metadata from YouTube Data API
+    yt_metadata = None
+    try:
+        yt_metadata = metadata_service.fetch_metadata(video_id)
+        logger.info(f"Fetched metadata for video {video_id}: {yt_metadata.title}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch YouTube metadata for {video_id}: {e}")
 
     # Prepare file paths
     timestamped_content = transcript.timestamped_text
@@ -84,9 +103,10 @@ async def ingest_video(
     file_size = await minio_storage.upload(file_path, file_data, "text/plain")
 
     # Create metadata in SurrealDB
+    video_title = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
     metadata = ContentMetadata(
         content_type="youtube",
-        title=f"YouTube: {video_id}",
+        title=video_title,
         mime_type="text/plain",
         file_size=file_size,
         file_path=file_path,
@@ -95,22 +115,36 @@ async def ingest_video(
             "video_id": video_id,
             "language": transcript.language,
             "segment_count": len(transcript.segments),
+            "channel_title": yt_metadata.channel_title if yt_metadata else None,
+            "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
         },
     )
     created = await surreal_repo.create_content(metadata)
     content_id = created.id or video_id
 
-    # Save metadata.json to MinIO
+    # Save metadata.json to MinIO (include rich YouTube metadata if available)
     metadata_dict = {
         "id": content_id,
         "video_id": video_id,
-        "title": metadata.title,
+        "title": yt_metadata.title if yt_metadata else metadata.title,
+        "description": yt_metadata.description if yt_metadata else None,
+        "description_urls": yt_metadata.description_urls if yt_metadata else [],
+        "channel_id": yt_metadata.channel_id if yt_metadata else None,
+        "channel_title": yt_metadata.channel_title if yt_metadata else None,
+        "published_at": yt_metadata.published_at if yt_metadata else None,
+        "duration": yt_metadata.duration_formatted if yt_metadata else None,
+        "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
+        "view_count": yt_metadata.view_count if yt_metadata else None,
+        "like_count": yt_metadata.like_count if yt_metadata else None,
+        "tags": yt_metadata.tags if yt_metadata else [],
+        "thumbnails": yt_metadata.thumbnails if yt_metadata else {},
         "language": transcript.language,
         "segment_count": len(transcript.segments),
         "transcript_length": len(transcript.full_text),
         "file_size": file_size,
         "author": key_id,
         "created_at": created.created_at.isoformat() if created.created_at else None,
+        "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
     }
     metadata_json = json.dumps(metadata_dict, indent=2)
     await minio_storage.upload(
@@ -140,13 +174,53 @@ async def ingest_video(
             await surreal_repo.create_chunk(chunk)
             chunks_created += 1
 
+    # Generate summary using LLM
+    summary = None
+    summary_path = f"youtube/{video_id}/summary.md"
+    try:
+        # Build context from metadata
+        title_text = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
+        description_text = yt_metadata.description[:1000] if yt_metadata and yt_metadata.description else ""
+        channel_text = yt_metadata.channel_title if yt_metadata else "Unknown"
+        links_text = "\n".join(yt_metadata.description_urls[:10]) if yt_metadata and yt_metadata.description_urls else "None"
+
+        # Truncate transcript if too long (qwen3 context limit)
+        transcript_for_summary = transcript.full_text[:12000]
+        summary_prompt = f"""Summarize this YouTube video:
+
+**Title:** {title_text}
+**Channel:** {channel_text}
+**Description:** {description_text}
+
+**Links from description:**
+{links_text}
+
+**Transcript:**
+{transcript_for_summary}
+
+Provide:
+1. A 2-3 sentence overview
+2. 3-5 bullet points of main topics covered
+3. 2-3 notable timestamps with what's discussed
+4. Any relevant links from the description that relate to the content"""
+
+        summary = await llm_service.generate(summary_prompt)
+
+        # Store summary in MinIO
+        summary_data = io.BytesIO(summary.encode("utf-8"))
+        await minio_storage.upload(summary_path, summary_data, "text/markdown")
+        logger.info(f"Summary generated and stored for video {video_id}")
+    except Exception as e:
+        logger.warning(f"Failed to generate summary for {video_id}: {e}")
+
     return YouTubeIngestResponse(
         id=content_id,
         video_id=video_id,
-        title=f"YouTube: {video_id}",
+        title=video_title,
         transcript_length=len(transcript.full_text),
         chunks_created=chunks_created,
         file_path=file_path,
+        summary=summary,
     )
 
 
