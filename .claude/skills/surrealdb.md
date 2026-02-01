@@ -394,3 +394,39 @@ SELECT count() FROM chunk GROUP ALL;
 -- Check SurrealDB version (via HTTP)
 -- curl http://localhost:8000/version
 ```
+
+## References
+
+### Official Documentation
+- [SurrealDB Docs Home](https://surrealdb.com/docs)
+- [SurrealQL Statements](https://surrealdb.com/docs/surrealql/statements)
+- [DEFINE INDEX](https://surrealdb.com/docs/surrealql/statements/define/indexes)
+- [RELATE Statement](https://surrealdb.com/docs/surrealql/statements/relate)
+- [Vector Functions](https://surrealdb.com/docs/surrealql/functions/database/vector)
+
+### Python SDK
+- [Python SDK Overview](https://surrealdb.com/docs/sdk/python)
+- [SDK Methods Reference](https://surrealdb.com/docs/sdk/python/methods)
+- [Real-Time Streaming](https://surrealdb.com/docs/sdk/python/concepts/streaming)
+- [GitHub: surrealdb.py](https://github.com/surrealdb/surrealdb.py)
+
+### Best Practices
+- [Performance Best Practices](https://surrealdb.com/docs/surrealdb/reference-guide/performance-best-practices)
+- [Security Best Practices](https://surrealdb.com/docs/surrealdb/reference-guide/security-best-practices)
+- [Known Issues](https://surrealdb.com/docs/surrealdb/faqs/known-issues)
+
+### Data Models
+- [Using as Vector Database](https://surrealdb.com/docs/surrealdb/models/vector)
+- [Using as Graph Database](https://surrealdb.com/docs/surrealdb/models/graph)
+- [Full-Text Search](https://surrealdb.com/docs/surrealdb/models/full-text-search)
+
+### Tutorials
+- [SurrealDB Fundamentals](https://surrealdb.com/learn/fundamentals)
+- [Graph Relations](https://surrealdb.com/learn/fundamentals/relationships/graph-relations)
+- [Indexing & Data Model](https://surrealdb.com/learn/fundamentals/performance/index-data-model)
+
+### Community
+- [GitHub Issues](https://github.com/surrealdb/surrealdb/issues)
+- [GitHub Discussions](https://github.com/orgs/surrealdb/discussions)
+- [SurrealDB Blog](https://surrealdb.com/blog)
+- [Release Notes](https://surrealdb.com/releases)
