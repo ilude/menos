@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from menos.models import ChunkModel, ContentMetadata
+from menos.models import ChunkModel, ContentMetadata, LinkModel
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 
 
@@ -231,3 +231,135 @@ class TestSurrealDBRepository:
 
         assert len(chunks) == 2
         assert chunks[0].text == "chunk 1"
+
+    @pytest.mark.asyncio
+    async def test_find_content_by_title(self):
+        """Test finding content by title."""
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": "content:test123",
+                        "content_type": "document",
+                        "title": "Python Guide",
+                        "mime_type": "text/plain",
+                        "file_size": 100,
+                        "file_path": "test/file.txt",
+                    }
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        result = await repo.find_content_by_title("Python Guide")
+
+        assert result is not None
+        assert result.title == "Python Guide"
+        assert result.id == "content:test123"
+
+    @pytest.mark.asyncio
+    async def test_find_content_by_title_not_found(self):
+        """Test finding non-existent content by title."""
+        mock_db = MagicMock()
+        mock_db.query.return_value = [{"result": []}]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        result = await repo.find_content_by_title("Nonexistent")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_create_link(self):
+        """Test link creation."""
+        mock_db = MagicMock()
+        mock_db.create.return_value = [{"id": "link:abc123"}]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        link = LinkModel(
+            source="source123",
+            target="target456",
+            link_text="Example Link",
+            link_type="wiki",
+        )
+
+        result = await repo.create_link(link)
+
+        assert result.id == "abc123"
+        assert result.created_at is not None
+        mock_db.create.assert_called_once()
+        # Verify record references are created
+        call_args = mock_db.create.call_args[0]
+        assert call_args[1]["source"] == "content:source123"
+        assert call_args[1]["target"] == "content:target456"
+
+    @pytest.mark.asyncio
+    async def test_create_link_without_target(self):
+        """Test creating link with unresolved target."""
+        mock_db = MagicMock()
+        mock_db.create.return_value = [{"id": "link:abc123"}]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        link = LinkModel(
+            source="source123",
+            target=None,
+            link_text="Unresolved Link",
+            link_type="wiki",
+        )
+
+        result = await repo.create_link(link)
+
+        assert result.id == "abc123"
+        assert result.target is None
+
+    @pytest.mark.asyncio
+    async def test_delete_links_by_source(self):
+        """Test deleting all links from a source."""
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        await repo.delete_links_by_source("test123")
+
+        mock_db.query.assert_called_once()
+        call_args = mock_db.query.call_args[0][0]
+        assert "DELETE FROM link" in call_args
+        assert "source = content:test123" in call_args
+
+    @pytest.mark.asyncio
+    async def test_get_links_by_source(self):
+        """Test getting all links from a source."""
+        mock_db = MagicMock()
+        mock_record_id = MagicMock()
+        mock_record_id.id = "content:source123"
+        mock_target_id = MagicMock()
+        mock_target_id.id = "content:target456"
+
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": MagicMock(id="link:1"),
+                        "source": mock_record_id,
+                        "target": mock_target_id,
+                        "link_text": "Link 1",
+                        "link_type": "wiki",
+                    },
+                    {
+                        "id": MagicMock(id="link:2"),
+                        "source": mock_record_id,
+                        "target": None,
+                        "link_text": "Link 2",
+                        "link_type": "markdown",
+                    },
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        links = await repo.get_links_by_source("source123")
+
+        assert len(links) == 2
+        assert links[0].source == "content:source123"
+        assert links[0].target == "content:target456"
+        assert links[0].link_text == "Link 1"
+        assert links[1].target is None

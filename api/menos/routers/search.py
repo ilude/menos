@@ -17,6 +17,7 @@ class SearchQuery(BaseModel):
 
     query: str
     content_type: str | None = None
+    tags: list[str] | None = None
     limit: int = 20
 
 
@@ -86,18 +87,27 @@ async def vector_search(
     # Generate query embedding
     query_embedding = await embedding_service.embed(body.query)
 
+    # Build WHERE clause with tag filtering
+    where_clause = "WHERE vector::similarity::cosine(embedding, $embedding) > 0.3"
+    params = {"embedding": query_embedding, "limit": body.limit}
+
+    if body.tags:
+        # Filter chunks where content has all specified tags
+        where_clause += " AND content_id.tags CONTAINSALL $tags"
+        params["tags"] = body.tags
+
     # Native SurrealDB vector search with cosine similarity
     # Returns chunks with their similarity scores directly
     search_results = surreal_repo.db.query(
-        """
+        f"""
         SELECT text, content_id,
                vector::similarity::cosine(embedding, $embedding) AS score
         FROM chunk
-        WHERE vector::similarity::cosine(embedding, $embedding) > 0.3
+        {where_clause}
         ORDER BY score DESC
         LIMIT $limit
         """,
-        {"embedding": query_embedding, "limit": body.limit},
+        params,
     )
 
     # Handle SurrealDB v2 query result format

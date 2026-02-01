@@ -15,8 +15,14 @@ from cryptography.hazmat.primitives.serialization import (
 from fastapi.testclient import TestClient
 
 from menos.client.signer import RequestSigner
-from menos.services.di import get_minio_storage, get_surreal_repo
+from menos.services.di import (
+    get_minio_storage,
+    get_surreal_repo,
+)
 from menos.services.embeddings import EmbeddingService, get_embedding_service
+from menos.services.llm import get_llm_service
+from menos.services.youtube import get_youtube_service
+from menos.services.youtube_metadata import get_youtube_metadata_service
 
 
 @pytest.fixture
@@ -106,7 +112,32 @@ def mock_minio_storage():
 
 
 @pytest.fixture
-def app_with_keys(keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_service, mock_minio_storage):
+def mock_youtube_service():
+    """Mock YouTube service."""
+    service = MagicMock()
+    service.extract_video_id = MagicMock(return_value="test_video")
+    service.fetch_transcript = MagicMock()
+    return service
+
+
+@pytest.fixture
+def mock_metadata_service():
+    """Mock YouTube metadata service."""
+    service = MagicMock()
+    service.fetch_metadata = MagicMock()
+    return service
+
+
+@pytest.fixture
+def mock_llm_service():
+    """Mock LLM service."""
+    service = MagicMock()
+    service.generate = AsyncMock(return_value="Test summary")
+    return service
+
+
+@pytest.fixture
+def app_with_keys(keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_service, mock_minio_storage, mock_youtube_service, mock_metadata_service, mock_llm_service):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
 
@@ -125,6 +156,9 @@ def app_with_keys(keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_servi
     app.dependency_overrides[get_surreal_repo] = lambda: mock_surreal_repo
     app.dependency_overrides[get_embedding_service] = lambda: mock_embedding_service
     app.dependency_overrides[get_minio_storage] = lambda: mock_minio_storage
+    app.dependency_overrides[get_youtube_service] = lambda: mock_youtube_service
+    app.dependency_overrides[get_youtube_metadata_service] = lambda: mock_metadata_service
+    app.dependency_overrides[get_llm_service] = lambda: mock_llm_service
 
     yield app
 

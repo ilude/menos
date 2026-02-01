@@ -32,3 +32,14 @@ class ContentMetadata(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LinkModel(BaseModel):
+    """Link between content items."""
+
+    id: str | None = None
+    source: str  # Content ID
+    target: str | None = None  # Content ID, nullable for unresolved links
+    link_text: str
+    link_type: str  # "wiki" or "markdown"
+    created_at: datetime | None = None

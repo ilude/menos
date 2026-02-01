@@ -7,7 +7,7 @@ from minio import Minio
 from minio.error import S3Error
 from surrealdb import Surreal
 
-from menos.models import ChunkModel, ContentMetadata
+from menos.models import ChunkModel, ContentMetadata, LinkModel
 
 
 class MinIOStorage:
@@ -166,6 +166,7 @@ class SurrealDBRepository:
         offset: int = 0,
         limit: int = 50,
         content_type: str | None = None,
+        tags: list[str] | None = None,
     ) -> tuple[list[ContentMetadata], int]:
         """List content metadata.
 
@@ -173,13 +174,22 @@ class SurrealDBRepository:
             offset: Query offset
             limit: Query limit
             content_type: Optional filter by content type
+            tags: Optional filter by tags (must have all specified tags)
 
         Returns:
             Tuple of (content list, total count)
         """
-        where_clause = ""
+        where_clauses = []
         if content_type:
-            where_clause = f" WHERE content_type = '{content_type}'"
+            where_clauses.append(f"content_type = '{content_type}'")
+        if tags:
+            # Escape tags and build CONTAINSALL query
+            tags_str = ", ".join(f"'{tag}'" for tag in tags)
+            where_clauses.append(f"tags CONTAINSALL [{tags_str}]")
+
+        where_clause = ""
+        if where_clauses:
+            where_clause = " WHERE " + " AND ".join(where_clauses)
 
         result = self.db.query(
             f"SELECT * FROM content{where_clause} LIMIT {limit} START {offset}"
@@ -271,3 +281,134 @@ class SurrealDBRepository:
             content_id: Content ID
         """
         self.db.query(f"DELETE FROM chunk WHERE content_id = '{content_id}'")
+
+    async def list_tags_with_counts(self) -> list[dict[str, str | int]]:
+        """Get all tags with their counts, sorted by count descending then alphabetically.
+
+        Returns:
+            List of dicts with 'name' and 'count' keys, sorted by count (desc) then name (asc)
+        """
+        result = self.db.query(
+            "SELECT array::flatten(tags) as tag FROM content WHERE tags != NONE "
+            "GROUP BY tag FETCH tag UNGROUP"
+        )
+
+        tags_data = []
+        if result and isinstance(result, list) and len(result) > 0:
+            # Handle both old format (wrapped in result key) and new format (direct list)
+            if isinstance(result[0], dict) and "result" in result[0]:
+                raw_items = result[0]["result"]
+            else:
+                raw_items = result
+
+            # Count occurrences of each tag and build response
+            tag_counts: dict[str, int] = {}
+            for item in raw_items:
+                if isinstance(item, dict):
+                    tag = item.get("tag")
+                    if tag:
+                        tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+            # Sort by count descending, then by name ascending
+            sorted_tags = sorted(
+                tag_counts.items(),
+                key=lambda x: (-x[1], x[0])
+            )
+
+            tags_data = [{"name": name, "count": count} for name, count in sorted_tags]
+
+        return tags_data
+
+    async def find_content_by_title(self, title: str) -> ContentMetadata | None:
+        """Find content by exact title match.
+
+        Args:
+            title: Content title to search for
+
+        Returns:
+            Content metadata or None if not found
+        """
+        result = self.db.query(
+            f"SELECT * FROM content WHERE title = '{title}' LIMIT 1"
+        )
+        if result and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], dict) and "result" in result[0]:
+                raw_items = result[0]["result"]
+            else:
+                raw_items = result
+
+            if raw_items:
+                item = dict(raw_items[0])
+                if "id" in item and hasattr(item["id"], "id"):
+                    item["id"] = item["id"].id
+                return ContentMetadata(**item)
+        return None
+
+    async def create_link(self, link: LinkModel) -> LinkModel:
+        """Create link between content items.
+
+        Args:
+            link: Link data
+
+        Returns:
+            Created link with ID
+        """
+        link.created_at = datetime.now(UTC)
+        link_data = link.model_dump(exclude_none=True)
+
+        # Convert IDs to record references
+        link_data["source"] = f"content:{link_data['source']}"
+        if link_data.get("target"):
+            link_data["target"] = f"content:{link_data['target']}"
+
+        result = self.db.create("link", link_data)
+        if result:
+            record = result[0] if isinstance(result, list) else result
+            record_id = record["id"]
+            if hasattr(record_id, "record_id"):
+                link.id = str(record_id.record_id)
+            else:
+                link.id = str(record_id).split(":")[-1]
+        return link
+
+    async def delete_links_by_source(self, content_id: str) -> None:
+        """Delete all links originating from a content item.
+
+        Args:
+            content_id: Source content ID
+        """
+        self.db.query(f"DELETE FROM link WHERE source = content:{content_id}")
+
+    async def get_links_by_source(self, content_id: str) -> list[LinkModel]:
+        """Get all links originating from a content item.
+
+        Args:
+            content_id: Source content ID
+
+        Returns:
+            List of links
+        """
+        result = self.db.query(
+            f"SELECT * FROM link WHERE source = content:{content_id}"
+        )
+        if result and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], dict) and "result" in result[0]:
+                raw_items = result[0]["result"]
+            else:
+                raw_items = result
+
+            links = []
+            for item in raw_items:
+                item_copy = dict(item)
+                # Convert record references to simple IDs
+                if "source" in item_copy:
+                    source_val = item_copy["source"]
+                    item_copy["source"] = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+                if "target" in item_copy and item_copy["target"]:
+                    target_val = item_copy["target"]
+                    item_copy["target"] = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+                if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                    item_copy["id"] = item_copy["id"].id
+                links.append(LinkModel(**item_copy))
+            return links
+        return []

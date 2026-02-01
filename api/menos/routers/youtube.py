@@ -65,6 +65,20 @@ class YouTubeVideoInfo(BaseModel):
     chunk_count: int
 
 
+class YouTubeChannelInfo(BaseModel):
+    """Channel information response."""
+
+    channel_id: str
+    channel_title: str
+    video_count: int
+
+
+class YouTubeChannelsResponse(BaseModel):
+    """Response containing list of channels."""
+
+    channels: list[YouTubeChannelInfo]
+
+
 @router.post("/ingest", response_model=YouTubeIngestResponse)
 async def ingest_video(
     body: YouTubeIngestRequest,
@@ -111,10 +125,12 @@ async def ingest_video(
         file_size=file_size,
         file_path=file_path,
         author=key_id,
+        tags=yt_metadata.tags if yt_metadata else [],
         metadata={
             "video_id": video_id,
             "language": transcript.language,
             "segment_count": len(transcript.segments),
+            "channel_id": yt_metadata.channel_id if yt_metadata else None,
             "channel_title": yt_metadata.channel_title if yt_metadata else None,
             "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
         },
@@ -254,6 +270,7 @@ async def upload_transcript(
         file_size=file_size,
         file_path=transcript_path,
         author=key_id,
+        tags=[],
         metadata={
             "video_id": video_id,
             "language": body.language,
@@ -314,6 +331,54 @@ async def upload_transcript(
     )
 
 
+@router.get("/channels", response_model=YouTubeChannelsResponse)
+async def list_channels(
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get all YouTube channels with video counts.
+
+    Returns a list of unique channels from ingested videos with the number
+    of videos from each channel.
+
+    Args:
+        key_id: Authenticated user ID
+        surreal_repo: Database repository
+
+    Returns:
+        Response containing list of channels with video counts
+    """
+    items, _ = await surreal_repo.list_content(content_type="youtube", limit=1000)
+
+    channels_map: dict[str, tuple[str, int]] = {}
+
+    for item in items:
+        if not item.metadata:
+            continue
+
+        channel_id = item.metadata.get("channel_id")
+        channel_title = item.metadata.get("channel_title")
+
+        if channel_id:
+            if channel_id not in channels_map:
+                channels_map[channel_id] = (channel_title or "Unknown Channel", 0)
+            title, count = channels_map[channel_id]
+            channels_map[channel_id] = (title, count + 1)
+
+    channels = [
+        YouTubeChannelInfo(
+            channel_id=channel_id,
+            channel_title=title,
+            video_count=count,
+        )
+        for channel_id, (title, count) in sorted(
+            channels_map.items(), key=lambda x: x[1][1], reverse=True
+        )
+    ]
+
+    return YouTubeChannelsResponse(channels=channels)
+
+
 @router.get("/{video_id}", response_model=YouTubeVideoInfo)
 async def get_video(
     video_id: str,
@@ -357,15 +422,31 @@ async def get_video(
 @router.get("", response_model=list[YouTubeVideoInfo])
 async def list_videos(
     key_id: AuthenticatedKeyId,
+    channel_id: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
 ):
-    """List all ingested YouTube videos."""
+    """List all ingested YouTube videos.
+
+    Args:
+        key_id: Authenticated user ID
+        channel_id: Optional filter by YouTube channel ID
+        limit: Maximum number of videos to return
+        surreal_repo: Database repository
+
+    Returns:
+        List of YouTube videos, optionally filtered by channel
+    """
     items, _ = await surreal_repo.list_content(content_type="youtube", limit=limit)
 
     videos = []
     for item in items:
         video_id = item.metadata.get("video_id", "") if item.metadata else ""
+        item_channel_id = item.metadata.get("channel_id") if item.metadata else None
+
+        if channel_id and item_channel_id != channel_id:
+            continue
+
         chunks = await surreal_repo.get_chunks(item.id or "")
 
         videos.append(
