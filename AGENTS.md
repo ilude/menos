@@ -266,7 +266,10 @@ To test migration system changes:
 3. Check logs: `docker compose logs menos-api`
 4. Verify: `docker exec menos-api python -c "from menos.services.migrator import MigrationService; ..."`
 
-**Note**: Large index operations (e.g., MTREE on 45k+ vectors) may timeout on app startup. These should be run manually with extended timeouts via curl or after initial deployment.
+**Note**: Vector indexes use `CONCURRENTLY` to build in the background without transaction conflicts. Monitor progress with:
+```sql
+INFO FOR INDEX idx_chunk_embedding ON chunk;
+-- Returns: {"building":{"initial":N,"pending":0,"status":"indexing"}} or {"status":"ready"}
 
 ### Manual Deployment (without Ansible)
 
