@@ -4,7 +4,7 @@
 class ChunkingService:
     """Service for splitting content into chunks."""
 
-    def __init__(self, chunk_size: int = 512, overlap: int = 50):
+    def __init__(self, chunk_size: int = 1024, overlap: int = 150):
         """Initialize chunking service.
 
         Args:

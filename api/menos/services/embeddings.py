@@ -8,6 +8,8 @@ from menos.config import settings
 class EmbeddingService:
     """Service for generating embeddings via Ollama."""
 
+    QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
     def __init__(self, base_url: str, model: str):
         """Initialize embedding service.
 
@@ -66,6 +68,34 @@ class EmbeddingService:
             embedding = await self.embed(text)
             embeddings.append(embedding)
         return embeddings
+
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed search query with asymmetric prefix.
+
+        Args:
+            text: Query text to embed
+
+        Returns:
+            List of floats representing the embedding vector
+
+        Raises:
+            RuntimeError: If embedding generation fails
+        """
+        return await self.embed(f"{self.QUERY_PREFIX}{text}")
+
+    async def embed_document(self, text: str) -> list[float]:
+        """Embed document (no prefix).
+
+        Args:
+            text: Document text to embed
+
+        Returns:
+            List of floats representing the embedding vector
+
+        Raises:
+            RuntimeError: If embedding generation fails
+        """
+        return await self.embed(text)
 
     async def close(self) -> None:
         """Close the HTTP client."""

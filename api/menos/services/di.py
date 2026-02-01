@@ -1,12 +1,28 @@
 """Dependency injection container for services."""
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from functools import lru_cache
 
 from minio import Minio
 from surrealdb import Surreal
 
 from menos.config import settings
+from menos.services.agent import AgentService
+from menos.services.embeddings import get_embedding_service
+from menos.services.llm import LLMProvider, OllamaLLMProvider
+from menos.services.llm_providers import (
+    AnthropicProvider,
+    NoOpLLMProvider,
+    OpenAIProvider,
+    OpenRouterProvider,
+)
+from menos.services.reranker import (
+    LLMRerankerProvider,
+    NoOpRerankerProvider,
+    RerankerLibraryProvider,
+    RerankerProvider,
+)
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 
 
@@ -67,3 +83,136 @@ async def get_surreal_repo() -> SurrealDBRepository:
     )
     await repo.connect()
     return repo
+
+
+@lru_cache(maxsize=1)
+def get_expansion_provider() -> LLMProvider:
+    """Get singleton expansion LLM provider based on settings.
+
+    Returns the appropriate LLM provider instance for query expansion:
+    - "ollama" -> OllamaLLMProvider
+    - "openai" -> OpenAIProvider
+    - "anthropic" -> AnthropicProvider
+    - "openrouter" -> OpenRouterProvider
+    - "none" -> NoOpLLMProvider
+
+    Returns:
+        LLMProvider instance configured for expansion
+    """
+    provider_type = settings.agent_expansion_provider
+    model = settings.agent_expansion_model
+
+    if provider_type == "ollama":
+        return OllamaLLMProvider(settings.ollama_url, model)
+    elif provider_type == "openai":
+        if not settings.openai_api_key:
+            raise ValueError("openai_api_key must be set when using openai expansion provider")
+        return OpenAIProvider(settings.openai_api_key, model)
+    elif provider_type == "anthropic":
+        if not settings.anthropic_api_key:
+            msg = "anthropic_api_key must be set for anthropic expansion provider"
+            raise ValueError(msg)
+        return AnthropicProvider(settings.anthropic_api_key, model)
+    elif provider_type == "openrouter":
+        if not settings.openrouter_api_key:
+            msg = "openrouter_api_key must be set for openrouter expansion provider"
+            raise ValueError(msg)
+        return OpenRouterProvider(settings.openrouter_api_key, model)
+    elif provider_type == "none":
+        return NoOpLLMProvider()
+    else:
+        raise ValueError(f"Unknown expansion provider: {provider_type}")
+
+
+@lru_cache(maxsize=1)
+def get_synthesis_provider() -> LLMProvider:
+    """Get singleton synthesis LLM provider based on settings.
+
+    Returns the appropriate LLM provider instance for result synthesis:
+    - "ollama" -> OllamaLLMProvider
+    - "openai" -> OpenAIProvider
+    - "anthropic" -> AnthropicProvider
+    - "openrouter" -> OpenRouterProvider
+    - "none" -> NoOpLLMProvider
+
+    Returns:
+        LLMProvider instance configured for synthesis
+    """
+    provider_type = settings.agent_synthesis_provider
+    model = settings.agent_synthesis_model
+
+    if provider_type == "ollama":
+        return OllamaLLMProvider(settings.ollama_url, model)
+    elif provider_type == "openai":
+        if not settings.openai_api_key:
+            msg = "openai_api_key must be set for openai synthesis provider"
+            raise ValueError(msg)
+        return OpenAIProvider(settings.openai_api_key, model)
+    elif provider_type == "anthropic":
+        if not settings.anthropic_api_key:
+            msg = "anthropic_api_key must be set for anthropic synthesis provider"
+            raise ValueError(msg)
+        return AnthropicProvider(settings.anthropic_api_key, model)
+    elif provider_type == "openrouter":
+        if not settings.openrouter_api_key:
+            msg = "openrouter_api_key must be set for openrouter synthesis provider"
+            raise ValueError(msg)
+        return OpenRouterProvider(settings.openrouter_api_key, model)
+    elif provider_type == "none":
+        return NoOpLLMProvider()
+    else:
+        raise ValueError(f"Unknown synthesis provider: {provider_type}")
+
+
+@lru_cache(maxsize=1)
+def get_reranker() -> RerankerProvider:
+    """Get singleton reranker provider based on settings.
+
+    Returns the appropriate reranker provider instance:
+    - "rerankers" -> RerankerLibraryProvider
+    - "llm" -> LLMRerankerProvider using synthesis provider
+    - "none" -> NoOpRerankerProvider
+
+    Returns:
+        RerankerProvider instance configured for reranking
+    """
+    provider_type = settings.agent_rerank_provider
+    model = settings.agent_rerank_model
+
+    if provider_type == "rerankers":
+        return RerankerLibraryProvider(model)
+    elif provider_type == "llm":
+        synthesis_provider = get_synthesis_provider()
+        return LLMRerankerProvider(synthesis_provider)
+    elif provider_type == "none":
+        return NoOpRerankerProvider()
+    else:
+        raise ValueError(f"Unknown reranker provider: {provider_type}")
+
+
+async def get_agent_service() -> AgentService:
+    """Get AgentService instance for dependency injection.
+
+    Constructs AgentService with all required dependencies:
+    - expansion_provider from get_expansion_provider()
+    - synthesis_provider from get_synthesis_provider()
+    - reranker from get_reranker()
+    - embedding_service from get_embedding_service()
+    - surreal_repo from get_surreal_repo()
+
+    Returns:
+        Configured AgentService instance
+    """
+    expansion_provider = get_expansion_provider()
+    synthesis_provider = get_synthesis_provider()
+    reranker = get_reranker()
+    embedding_service = get_embedding_service()
+    surreal_repo = await get_surreal_repo()
+
+    return AgentService(
+        expansion_provider=expansion_provider,
+        reranker=reranker,
+        synthesis_provider=synthesis_provider,
+        embedding_service=embedding_service,
+        surreal_repo=surreal_repo,
+    )
