@@ -119,6 +119,22 @@ class SurrealDBRepository:
         # Select namespace and database
         self.db.use(self.namespace, self.database)
 
+    def _parse_query_result(self, result: list) -> list[dict]:
+        """Parse SurrealDB query result handling v2 format variations.
+
+        Args:
+            result: Raw query result from SurrealDB
+
+        Returns:
+            List of record dictionaries
+        """
+        if not result or not isinstance(result, list) or len(result) == 0:
+            return []
+        first = result[0]
+        if isinstance(first, dict) and "result" in first:
+            return first["result"] or []
+        return result
+
     async def create_content(self, metadata: ContentMetadata) -> ContentMetadata:
         """Create content metadata record.
 
@@ -179,37 +195,34 @@ class SurrealDBRepository:
         Returns:
             Tuple of (content list, total count)
         """
+        # Build parameterized query
+        params: dict = {"limit": limit, "offset": offset}
         where_clauses = []
         if content_type:
-            where_clauses.append(f"content_type = '{content_type}'")
+            where_clauses.append("content_type = $content_type")
+            params["content_type"] = content_type
         if tags:
-            # Escape tags and build CONTAINSALL query
-            tags_str = ", ".join(f"'{tag}'" for tag in tags)
-            where_clauses.append(f"tags CONTAINSALL [{tags_str}]")
+            where_clauses.append("tags CONTAINSALL $tags")
+            params["tags"] = tags
 
         where_clause = ""
         if where_clauses:
             where_clause = " WHERE " + " AND ".join(where_clauses)
 
         result = self.db.query(
-            f"SELECT * FROM content{where_clause} LIMIT {limit} START {offset}"
+            f"SELECT * FROM content{where_clause} LIMIT $limit START $offset",
+            params,
         )
-        # SurrealDB v2 returns results directly as a list
-        if result and isinstance(result, list) and len(result) > 0:
-            # Handle both old format (wrapped in result key) and new format (direct list)
-            if isinstance(result[0], dict) and "result" in result[0]:
-                raw_items = result[0]["result"]
-            else:
-                raw_items = result
-            # Convert RecordID objects to strings
-            items = []
-            for item in raw_items:
-                item_copy = dict(item)
-                if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                    item_copy["id"] = item_copy["id"].id
-                items.append(ContentMetadata(**item_copy))
-            return items, len(items)
-        return [], 0
+        # Use the helper
+        raw_items = self._parse_query_result(result)
+        # Convert RecordID objects to strings
+        items = []
+        for item in raw_items:
+            item_copy = dict(item)
+            if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                item_copy["id"] = item_copy["id"].id
+            items.append(ContentMetadata(**item_copy))
+        return items, len(items)
 
     async def update_content(self, content_id: str, metadata: ContentMetadata) -> ContentMetadata:
         """Update content metadata.
@@ -269,10 +282,12 @@ class SurrealDBRepository:
         Returns:
             List of chunks
         """
-        result = self.db.query(f"SELECT * FROM chunk WHERE content_id = '{content_id}'")
-        if result and result[0].get("result"):
-            return [ChunkModel(**item) for item in result[0]["result"]]
-        return []
+        result = self.db.query(
+            "SELECT * FROM chunk WHERE content_id = $content_id",
+            {"content_id": content_id},
+        )
+        raw_items = self._parse_query_result(result)
+        return [ChunkModel(**item) for item in raw_items]
 
     async def delete_chunks(self, content_id: str) -> None:
         """Delete all chunks for content.
@@ -280,7 +295,10 @@ class SurrealDBRepository:
         Args:
             content_id: Content ID
         """
-        self.db.query(f"DELETE FROM chunk WHERE content_id = '{content_id}'")
+        self.db.query(
+            "DELETE (SELECT id FROM chunk WHERE content_id = $content_id)",
+            {"content_id": content_id},
+        )
 
     async def list_tags_with_counts(self) -> list[dict[str, str | int]]:
         """Get all tags with their counts, sorted by count descending then alphabetically.
@@ -329,19 +347,16 @@ class SurrealDBRepository:
             Content metadata or None if not found
         """
         result = self.db.query(
-            f"SELECT * FROM content WHERE title = '{title}' LIMIT 1"
+            "SELECT * FROM content WHERE title = $title LIMIT 1",
+            {"title": title},
         )
-        if result and isinstance(result, list) and len(result) > 0:
-            if isinstance(result[0], dict) and "result" in result[0]:
-                raw_items = result[0]["result"]
-            else:
-                raw_items = result
+        raw_items = self._parse_query_result(result)
 
-            if raw_items:
-                item = dict(raw_items[0])
-                if "id" in item and hasattr(item["id"], "id"):
-                    item["id"] = item["id"].id
-                return ContentMetadata(**item)
+        if raw_items:
+            item = dict(raw_items[0])
+            if "id" in item and hasattr(item["id"], "id"):
+                item["id"] = item["id"].id
+            return ContentMetadata(**item)
         return None
 
     async def create_link(self, link: LinkModel) -> LinkModel:
@@ -377,7 +392,10 @@ class SurrealDBRepository:
         Args:
             content_id: Source content ID
         """
-        self.db.query(f"DELETE FROM link WHERE source = content:{content_id}")
+        self.db.query(
+            "DELETE (SELECT id FROM link WHERE source = $source)",
+            {"source": f"content:{content_id}"},
+        )
 
     async def get_links_by_source(self, content_id: str) -> list[LinkModel]:
         """Get all links originating from a content item.
@@ -389,26 +407,203 @@ class SurrealDBRepository:
             List of links
         """
         result = self.db.query(
-            f"SELECT * FROM link WHERE source = content:{content_id}"
+            "SELECT * FROM link WHERE source = $source",
+            {"source": f"content:{content_id}"},
         )
-        if result and isinstance(result, list) and len(result) > 0:
-            if isinstance(result[0], dict) and "result" in result[0]:
-                raw_items = result[0]["result"]
-            else:
-                raw_items = result
+        raw_items = self._parse_query_result(result)
 
-            links = []
-            for item in raw_items:
+        links = []
+        for item in raw_items:
+            item_copy = dict(item)
+            # Convert record references to simple IDs
+            if "source" in item_copy:
+                source_val = item_copy["source"]
+                item_copy["source"] = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+            if "target" in item_copy and item_copy["target"]:
+                target_val = item_copy["target"]
+                item_copy["target"] = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+            if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                item_copy["id"] = item_copy["id"].id
+            links.append(LinkModel(**item_copy))
+        return links
+
+    async def get_links_by_target(self, content_id: str) -> list[LinkModel]:
+        """Get all links pointing to a content item (backlinks).
+
+        Args:
+            content_id: Target content ID
+
+        Returns:
+            List of links
+        """
+        result = self.db.query(
+            "SELECT * FROM link WHERE target = $target",
+            {"target": f"content:{content_id}"},
+        )
+        raw_items = self._parse_query_result(result)
+
+        links = []
+        for item in raw_items:
+            item_copy = dict(item)
+            # Convert record references to simple IDs
+            if "source" in item_copy:
+                source_val = item_copy["source"]
+                item_copy["source"] = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+            if "target" in item_copy and item_copy["target"]:
+                target_val = item_copy["target"]
+                item_copy["target"] = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+            if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                item_copy["id"] = item_copy["id"].id
+            links.append(LinkModel(**item_copy))
+        return links
+
+    async def get_graph_data(
+        self,
+        tags: list[str] | None = None,
+        content_type: str | None = None,
+        limit: int = 500,
+    ) -> tuple[list[ContentMetadata], list[LinkModel]]:
+        """Get graph data for visualization.
+
+        Args:
+            tags: Optional filter by tags (must have all specified tags)
+            content_type: Optional filter by content type
+            limit: Maximum number of nodes to return
+
+        Returns:
+            Tuple of (nodes, edges) where nodes are ContentMetadata and edges are LinkModel
+        """
+        # Build content query with filters
+        params: dict = {"limit": limit}
+        where_clauses = []
+        if content_type:
+            where_clauses.append("content_type = $content_type")
+            params["content_type"] = content_type
+        if tags:
+            where_clauses.append("tags CONTAINSALL $tags")
+            params["tags"] = tags
+
+        where_clause = ""
+        if where_clauses:
+            where_clause = " WHERE " + " AND ".join(where_clauses)
+
+        # Get content nodes
+        content_result = self.db.query(
+            f"SELECT * FROM content{where_clause} LIMIT $limit",
+            params,
+        )
+
+        nodes = []
+        node_ids = set()
+
+        raw_items = self._parse_query_result(content_result)
+        for item in raw_items:
+            item_copy = dict(item)
+            if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                item_copy["id"] = item_copy["id"].id
+            node = ContentMetadata(**item_copy)
+            if node.id:
+                nodes.append(node)
+                node_ids.add(node.id)
+
+        # Get all links where both source and target are in our node set
+        edges = []
+        if node_ids:
+            # Build query for links between nodes
+            node_refs = [f"content:{nid}" for nid in node_ids]
+            link_result = self.db.query(
+                "SELECT * FROM link WHERE source IN $ids OR target IN $ids",
+                {"ids": node_refs},
+            )
+
+            raw_links = self._parse_query_result(link_result)
+            for item in raw_links:
                 item_copy = dict(item)
                 # Convert record references to simple IDs
                 if "source" in item_copy:
                     source_val = item_copy["source"]
-                    item_copy["source"] = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+                    source_id = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+                    item_copy["source"] = source_id
+                else:
+                    continue
+
                 if "target" in item_copy and item_copy["target"]:
                     target_val = item_copy["target"]
-                    item_copy["target"] = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+                    target_id = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+                    item_copy["target"] = target_id
+                else:
+                    item_copy["target"] = None
+
                 if "id" in item_copy and hasattr(item_copy["id"], "id"):
                     item_copy["id"] = item_copy["id"].id
-                links.append(LinkModel(**item_copy))
-            return links
-        return []
+
+                # Only include links where both source and target are in node set
+                # (or target is None for unresolved links)
+                link = LinkModel(**item_copy)
+                if link.source in node_ids and (link.target is None or link.target in node_ids):
+                    edges.append(link)
+
+        return nodes, edges
+
+    async def get_neighborhood(
+        self,
+        content_id: str,
+        depth: int = 1,
+    ) -> tuple[list[ContentMetadata], list[LinkModel]]:
+        """Get local neighborhood graph around a content item.
+
+        Args:
+            content_id: Center node ID
+            depth: Number of hops to traverse (1-3)
+
+        Returns:
+            Tuple of (nodes, edges) in the neighborhood
+        """
+        # First check if center node exists
+        center_node = await self.get_content(content_id)
+        if not center_node:
+            return [], []
+
+        # Track visited nodes and edges
+        visited_nodes: dict[str, ContentMetadata] = {content_id: center_node}
+        all_edges: dict[str, LinkModel] = {}
+        current_layer = {content_id}
+
+        # Traverse depth layers
+        for _ in range(depth):
+            next_layer = set()
+
+            for node_id in current_layer:
+                # Get forward links (outgoing)
+                outgoing = await self.get_links_by_source(node_id)
+                for link in outgoing:
+                    all_edges[link.id or ""] = link
+
+                    # Add target node if not visited
+                    if link.target and link.target not in visited_nodes:
+                        target_node = await self.get_content(link.target)
+                        if target_node:
+                            visited_nodes[link.target] = target_node
+                            next_layer.add(link.target)
+
+                # Get backlinks (incoming)
+                incoming = await self.get_links_by_target(node_id)
+                for link in incoming:
+                    all_edges[link.id or ""] = link
+
+                    # Add source node if not visited
+                    if link.source and link.source not in visited_nodes:
+                        source_node = await self.get_content(link.source)
+                        if source_node:
+                            visited_nodes[link.source] = source_node
+                            next_layer.add(link.source)
+
+            current_layer = next_layer
+            if not current_layer:
+                break
+
+        # Convert to lists
+        nodes = list(visited_nodes.values())
+        edges = list(all_edges.values())
+
+        return nodes, edges

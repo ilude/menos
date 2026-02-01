@@ -85,7 +85,7 @@ async def vector_search(
 ):
     """Semantic vector search across content."""
     # Generate query embedding
-    query_embedding = await embedding_service.embed(body.query)
+    query_embedding = await embedding_service.embed_query(body.query)
 
     # Build WHERE clause with tag filtering
     where_clause = "WHERE vector::similarity::cosine(embedding, $embedding) > 0.3"
@@ -132,16 +132,24 @@ async def vector_search(
         ):
             best_per_content[content_id] = (score, text)
 
-    # Get content metadata for titles
-    content_results = surreal_repo.db.query("SELECT * FROM content")
+    # Get content metadata only for matched IDs
     id_to_meta: dict[str, dict] = {}
     content_list: list[dict] = []
-    if content_results and isinstance(content_results, list) and len(content_results) > 0:
-        result_item = content_results[0]
-        if isinstance(result_item, dict) and "result" in result_item:
-            content_list = result_item["result"]
-        elif isinstance(result_item, dict) and "id" in result_item:
-            content_list = content_results
+
+    content_ids = list(best_per_content.keys())
+    if content_ids:
+        content_refs = [f"content:{cid}" for cid in content_ids]
+        content_results = surreal_repo.db.query(
+            "SELECT * FROM content WHERE id IN $ids",
+            {"ids": content_refs}
+        )
+
+        if content_results and isinstance(content_results, list) and len(content_results) > 0:
+            result_item = content_results[0]
+            if isinstance(result_item, dict) and "result" in result_item:
+                content_list = result_item["result"]
+            elif isinstance(result_item, dict) and "id" in result_item:
+                content_list = content_results
 
     for content in content_list:
         rid = content.get("id")

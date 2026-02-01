@@ -79,7 +79,9 @@ class TestStorageTagFiltering:
         # Verify query was called with correct WHERE clause
         call_args = mock_db.query.call_args
         query = call_args[0][0]
-        assert "WHERE tags CONTAINSALL ['python']" in query
+        params = call_args[0][1]
+        assert "WHERE tags CONTAINSALL $tags" in query
+        assert params["tags"] == ["python"]
 
     def test_list_content_builds_correct_query_with_multiple_tags(self):
         """Should build correct WHERE clause for multiple tags."""
@@ -94,7 +96,9 @@ class TestStorageTagFiltering:
         # Verify query was called with correct WHERE clause
         call_args = mock_db.query.call_args
         query = call_args[0][0]
-        assert "WHERE tags CONTAINSALL ['python', 'testing']" in query
+        params = call_args[0][1]
+        assert "WHERE tags CONTAINSALL $tags" in query
+        assert params["tags"] == ["python", "testing"]
 
     def test_list_content_builds_correct_query_with_tags_and_content_type(self):
         """Should combine tags and content_type filters with AND."""
@@ -109,7 +113,10 @@ class TestStorageTagFiltering:
         # Verify query was called with both conditions
         call_args = mock_db.query.call_args
         query = call_args[0][0]
-        assert "WHERE content_type = 'document' AND tags CONTAINSALL ['python']" in query
+        params = call_args[0][1]
+        assert "WHERE content_type = $content_type AND tags CONTAINSALL $tags" in query
+        assert params["content_type"] == "document"
+        assert params["tags"] == ["python"]
 
     def test_list_content_without_tags(self):
         """Should work without tag filtering."""

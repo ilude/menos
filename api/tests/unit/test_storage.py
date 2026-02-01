@@ -321,9 +321,9 @@ class TestSurrealDBRepository:
         await repo.delete_links_by_source("test123")
 
         mock_db.query.assert_called_once()
-        call_args = mock_db.query.call_args[0][0]
-        assert "DELETE FROM link" in call_args
-        assert "source = content:test123" in call_args
+        call_args = mock_db.query.call_args[0]
+        assert "DELETE (SELECT id FROM link WHERE source = $source)" in call_args[0]
+        assert call_args[1] == {"source": "content:test123"}
 
     @pytest.mark.asyncio
     async def test_get_links_by_source(self):
@@ -363,3 +363,93 @@ class TestSurrealDBRepository:
         assert links[0].target == "content:target456"
         assert links[0].link_text == "Link 1"
         assert links[1].target is None
+
+    @pytest.mark.asyncio
+    async def test_get_links_by_target(self):
+        """Test getting all links pointing to a target (backlinks)."""
+        mock_db = MagicMock()
+        mock_source_id = MagicMock()
+        mock_source_id.id = "content:source123"
+        mock_target_id = MagicMock()
+        mock_target_id.id = "content:target456"
+
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": MagicMock(id="link:1"),
+                        "source": mock_source_id,
+                        "target": mock_target_id,
+                        "link_text": "Target Doc",
+                        "link_type": "wiki",
+                    },
+                    {
+                        "id": MagicMock(id="link:2"),
+                        "source": MagicMock(id="content:source789"),
+                        "target": mock_target_id,
+                        "link_text": "Another Link",
+                        "link_type": "markdown",
+                    },
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        backlinks = await repo.get_links_by_target("target456")
+
+        assert len(backlinks) == 2
+        assert backlinks[0].source == "content:source123"
+        assert backlinks[0].target == "content:target456"
+        assert backlinks[0].link_text == "Target Doc"
+        assert backlinks[1].source == "content:source789"
+        assert backlinks[1].target == "content:target456"
+        mock_db.query.assert_called_once()
+        call_args = mock_db.query.call_args[0]
+        assert "SELECT * FROM link WHERE target = $target" in call_args[0]
+        assert call_args[1] == {"target": "content:target456"}
+
+    @pytest.mark.asyncio
+    async def test_get_links_by_target_empty(self):
+        """Test getting backlinks when none exist."""
+        mock_db = MagicMock()
+        mock_db.query.return_value = [{"result": []}]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        backlinks = await repo.get_links_by_target("target456")
+
+        assert len(backlinks) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_links_by_target_handles_record_ids(self):
+        """Test that get_links_by_target properly converts RecordID objects."""
+        mock_db = MagicMock()
+
+        # Simulate RecordID objects
+        mock_source_id = MagicMock()
+        mock_source_id.id = "content:source123"
+        mock_target_id = MagicMock()
+        mock_target_id.id = "content:target456"
+        mock_link_id = MagicMock()
+        mock_link_id.id = "link:abc"
+
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": mock_link_id,
+                        "source": mock_source_id,
+                        "target": mock_target_id,
+                        "link_text": "Test Link",
+                        "link_type": "wiki",
+                    }
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        backlinks = await repo.get_links_by_target("target456")
+
+        assert len(backlinks) == 1
+        assert backlinks[0].id == "link:abc"
+        assert backlinks[0].source == "content:source123"
+        assert backlinks[0].target == "content:target456"
