@@ -1,6 +1,5 @@
 """YouTube metadata fetching service using Data API v3."""
 
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime

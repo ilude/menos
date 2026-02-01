@@ -1,6 +1,5 @@
 """Storage services for MinIO and SurrealDB."""
 
-import io
 from datetime import UTC, datetime
 from typing import BinaryIO
 
