@@ -42,7 +42,7 @@ This document captures suggested expert perspectives for reviewing and improving
 - Browser extension for web clipping
 - Graph visualization of knowledge connections
 
-**Status**: Under active review - see [PKM Features Gap Analysis](#pkm-features-gap-analysis)
+**Status**: ✅ **IMPLEMENTED** (2026-02-01) - See [PKM Features Implementation](#pkm-features-implementation)
 
 ---
 
@@ -68,267 +68,162 @@ This document captures suggested expert perspectives for reviewing and improving
 
 ---
 
-## PKM Features Gap Analysis
+## PKM Features Implementation
 
 **Review Date**: 2026-02-01
-**Reviewer Perspective**: PKM / Second Brain Expert
+**Implementation Date**: 2026-02-01
+**Status**: ✅ **COMPLETE**
 
 ### Executive Summary
 
-Menos has strong semantic search foundations but lacks the organizational features PKM users expect. Tags exist in the schema but are inaccessible via API. No linking, backlinks, or graph features exist. SurrealDB's graph capabilities are completely untapped.
+All core PKM features have been implemented. Menos now supports tagging, frontmatter parsing, bidirectional linking, and graph visualization.
 
-| Feature | Status | Priority |
-|---------|--------|----------|
-| Tags | Schema exists, API missing | High |
-| Frontmatter parsing | Not implemented | High |
-| Wiki-style links | Not implemented | High |
-| Backlinks | Not implemented | Medium |
-| Graph visualization | Not implemented | Medium |
-| Collections/folders | Not implemented | Low |
-
----
-
-### Current State
-
-#### What Exists
-- **Tags field**: Defined in `ContentMetadata` model (`api/menos/models.py:31`) as `list[str]`
-- **Database column**: `tags` field exists in SurrealDB schema (`migrations/20260201-100000_initial_schema.surql:13`)
-- **YouTube tags**: Extracted from YouTube API but stored only in metadata JSON, not in the `tags` field
-- **Channel metadata**: `channel_id` and `channel_title` captured for YouTube videos
-
-#### What's Missing
-- No API endpoints to create, update, or filter by tags
-- No frontmatter parsing for markdown files
-- No link extraction from content
-- No relationship/edge tables in SurrealDB
-- No graph traversal queries
-- No backlink tracking
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| Tags | ✅ Complete | API, filtering, frontmatter extraction |
+| Frontmatter parsing | ✅ Complete | `FrontmatterParser` service |
+| Wiki-style links | ✅ Complete | `LinkExtractor` service |
+| Backlinks | ✅ Complete | `/content/{id}/backlinks` endpoint |
+| Graph visualization | ✅ Complete | `/graph` and `/graph/neighborhood/{id}` |
+| YouTube channels | ✅ Complete | `/youtube/channels`, channel filtering |
+| Collections/folders | Not implemented | Future consideration |
 
 ---
 
-### Gap 1: Tagging System
+### Implemented Features
 
-**Current Implementation**: Tags field exists but is orphaned - never populated, never queryable.
+#### 1. Tagging System ✅
 
-#### Problems
-1. `POST /api/v1/content` doesn't accept tags in the request body
-2. No `PATCH` endpoint to update tags after creation
-3. `GET /api/v1/content` has no tag filtering
-4. `POST /api/v1/search` ignores tags entirely
-5. YouTube video tags are stored in MinIO JSON but not the database
+**Endpoints**:
+- `POST /api/v1/content?tags=a&tags=b` - Create content with tags
+- `PATCH /api/v1/content/{id}` - Update tags (and title, description)
+- `GET /api/v1/tags` - List all tags with counts
+- `GET /api/v1/content?tags=a,b` - Filter by tags (AND logic)
+- `POST /api/v1/search` - Accepts `tags` filter in request body
 
-#### User Expectations (from Obsidian/Logseq users)
-- Add tags inline with `#tag` syntax or in frontmatter
-- Browse all tags with counts
-- Filter search results by tag
-- Hierarchical tags (`#project/menos`, `#project/other`)
-- Tag suggestions/autocomplete
+**Features**:
+- Tags from query parameters merged with frontmatter tags
+- Deduplicated (explicit tags take precedence)
+- YouTube API tags synced to database
+- BTree index for efficient filtering
 
-#### Recommended Implementation
+**Files**:
+- `api/menos/routers/content.py` - Tag endpoints
+- `api/migrations/20260201-170000_add_content_tags_index.surql` - Tag index
 
-**Phase 1: API Support**
+---
+
+#### 2. Frontmatter Parsing ✅
+
+**Service**: `api/menos/services/frontmatter.py`
+
+**Capabilities**:
+- Parses YAML frontmatter from markdown files during upload
+- Extracts `title` field → populates content title if not provided
+- Extracts `tags` field → merged with explicit API tags
+- Graceful handling of malformed YAML
+- Ignores non-markdown files
+
+**Example**:
+```yaml
+---
+title: My Document
+tags:
+  - python
+  - api
+---
+# Content here
 ```
-POST   /api/v1/content          - Accept tags[] in body
-PATCH  /api/v1/content/{id}     - Update tags
-GET    /api/v1/tags             - List all tags with counts
-GET    /api/v1/content?tags=a,b - Filter by tags (AND/OR)
-POST   /api/v1/search           - Add tags filter parameter
-```
 
-**Phase 2: Tag Extraction**
-- Parse `#hashtags` from markdown content during ingestion
-- Extract tags from YAML frontmatter
-- Sync YouTube API tags to database `tags` field
+---
 
-**Phase 3: Tag Index**
+#### 3. Bidirectional Linking ✅
+
+**Service**: `api/menos/services/linking.py`
+
+**Link Extraction**:
+- Wiki-links: `[[Title]]` and `[[Title|display text]]`
+- Markdown links: `[text](internal-path)` (external URLs skipped)
+- Ignores links in code blocks
+- Stores unresolved links (target=null) for future resolution
+
+**Database Schema** (`api/migrations/20260201-160600_add_link_edge_table.surql`):
 ```sql
-DEFINE INDEX idx_content_tags ON content FIELDS tags;
-```
-
-**Effort Estimate**: Phase 1 is straightforward API work. Phase 2 requires markdown parsing.
-
----
-
-### Gap 2: Bidirectional Linking
-
-**Current Implementation**: None. Documents are isolated islands connected only by semantic similarity.
-
-#### Problems
-1. No wiki-link parsing (`[[document title]]` or `[[id]]`)
-2. No URL extraction and resolution for internal links
-3. No backlink tracking (what links TO this document)
-4. No "related documents" based on explicit links
-5. YouTube description URLs are extracted but not stored as relationships
-
-#### User Expectations
-- Wiki-style links: `[[Other Document]]` creates a relationship
-- Backlinks panel: "These 5 documents link to this one"
-- Forward links: "This document links to these 3 documents"
-- Broken link detection
-- Link suggestions based on content
-
-#### Recommended Implementation
-
-**Database Schema (leveraging SurrealDB graph features)**
-```sql
--- Edge table for document links
 DEFINE TABLE link SCHEMAFULL;
 DEFINE FIELD source ON link TYPE record<content>;
 DEFINE FIELD target ON link TYPE record<content>;
-DEFINE FIELD link_text ON link TYPE string;        -- The anchor text
-DEFINE FIELD link_type ON link TYPE string;        -- wiki, url, reference
+DEFINE FIELD link_text ON link TYPE string;
+DEFINE FIELD link_type ON link TYPE string;  -- wiki, markdown
 DEFINE FIELD created_at ON link TYPE datetime DEFAULT time::now();
-
--- Indexes for efficient traversal
 DEFINE INDEX idx_link_source ON link FIELDS source;
 DEFINE INDEX idx_link_target ON link FIELDS target;
 ```
 
-**API Endpoints**
-```
-GET /api/v1/content/{id}/links          - Forward links from this document
-GET /api/v1/content/{id}/backlinks      - Documents linking TO this document
-GET /api/v1/content/{id}/related        - Combined links + semantic similarity
-```
-
-**Link Extraction Service**
-```python
-# New service: api/menos/services/linking.py
-class LinkExtractor:
-    def extract_wiki_links(self, content: str) -> list[WikiLink]
-    def extract_markdown_links(self, content: str) -> list[MarkdownLink]
-    def resolve_link(self, link_text: str) -> str | None  # Returns content_id
-```
-
-**Effort Estimate**: Medium. Requires new service, schema migration, and ingestion pipeline changes.
+**Endpoints**:
+- `GET /api/v1/content/{id}/links` - Forward links (this doc links to...)
+- `GET /api/v1/content/{id}/backlinks` - Backlinks (these link to this doc)
 
 ---
 
-### Gap 3: Graph Visualization
+#### 4. Graph Visualization ✅
 
-**Current Implementation**: None. SurrealDB supports graph queries but they're unused.
+**Router**: `api/menos/routers/graph.py`
 
-#### Problems
-1. No visual representation of knowledge structure
-2. No way to explore connections between documents
-3. No clustering or community detection
-4. Can't see "neighborhoods" around a topic
+**Endpoints**:
+- `GET /api/v1/graph` - Full knowledge graph
+  - Query params: `tags`, `content_type`, `limit` (1-1000, default 500)
+- `GET /api/v1/graph/neighborhood/{id}` - Local neighborhood
+  - Query params: `depth` (1-3, default 1)
 
-#### User Expectations (from Obsidian Graph View)
-- Interactive node-link diagram
-- Filter by tags, content type, date range
-- Cluster by topic or tag
-- Search within graph
-- Zoom to local neighborhood of a document
-
-#### Recommended Implementation
-
-**Phase 1: Graph Data API**
-```
-GET /api/v1/graph                       - Full graph (nodes + edges)
-GET /api/v1/graph/neighborhood/{id}     - 1-2 hop neighborhood
-GET /api/v1/graph/clusters              - Topic clusters via embeddings
-```
-
-**Response Format**
+**Response Format**:
 ```json
 {
   "nodes": [
-    {"id": "content:xxx", "title": "...", "type": "markdown", "tags": [...]}
+    {"id": "abc123", "title": "Doc Title", "content_type": "document", "tags": ["python"]}
   ],
   "edges": [
-    {"source": "content:xxx", "target": "content:yyy", "type": "wiki_link"}
+    {"source": "abc123", "target": "def456", "link_type": "wiki", "link_text": "Related Doc"}
   ]
 }
 ```
 
-**Phase 2: Semantic Edges**
-Add edges for documents with high embedding similarity (>0.85):
-```sql
--- Could be computed periodically or on-demand
-SELECT id, title,
-  (SELECT id, title FROM content
-   WHERE id != $parent.id
-   AND vector::similarity::cosine(embedding, $parent.embedding) > 0.85
-  ) AS similar
-FROM content;
-```
-
-**Phase 3: Frontend Visualization**
-- Use D3.js force-directed graph or Cytoscape.js
-- Could be a separate static site or Obsidian plugin
-
-**Effort Estimate**: Phase 1 API is straightforward. Phase 2 requires embedding aggregation (currently per-chunk). Phase 3 is frontend work.
+**Usage**: Compatible with D3.js, Cytoscape.js, vis.js, or custom visualization.
 
 ---
 
-### Gap 4: YouTube-Specific Relationships
+#### 5. YouTube Channels ✅
 
-**Current Implementation**: Videos are isolated. Channel/playlist metadata exists but isn't queryable.
+**Endpoints**:
+- `GET /api/v1/youtube?channel_id=xxx` - Filter videos by channel
+- `GET /api/v1/youtube/channels` - List channels with video counts
 
-#### Problems
-1. Can't list all videos from a channel
-2. No playlist support
-3. No "related videos" feature
-4. Description URLs not stored as relationships
-
-#### Recommended Implementation
-
-**Quick Wins**
-```
-GET /api/v1/youtube?channel_id=xxx      - Filter by channel
-GET /api/v1/youtube/channels            - List channels with video counts
-```
-
-**Future: Playlist Support**
-```sql
-DEFINE TABLE playlist SCHEMAFULL;
-DEFINE FIELD playlist_id ON playlist TYPE string;
-DEFINE FIELD title ON playlist TYPE string;
-DEFINE FIELD videos ON playlist TYPE array<record<content>>;
+**Response** (channels):
+```json
+{
+  "channels": [
+    {"channel_id": "UCxxx", "channel_title": "Channel Name", "video_count": 15}
+  ]
+}
 ```
 
 ---
 
-### Implementation Roadmap
+### Future Improvements
 
-#### Phase 1: Tag System (Foundation)
-1. Add `tags` parameter to content upload endpoint
-2. Add tag filtering to list/search endpoints
-3. Create `/api/v1/tags` endpoint
-4. Add tag index to SurrealDB
-5. Parse frontmatter tags on markdown ingestion
+The following were identified but not implemented:
 
-#### Phase 2: Link Extraction
-1. Create `link` edge table in SurrealDB
-2. Build `LinkExtractor` service for wiki-links and markdown links
-3. Extract and store links during content ingestion
-4. Add backlinks/forward-links endpoints
-
-#### Phase 3: Graph API
-1. Create graph data endpoint returning nodes/edges
-2. Add neighborhood query for local exploration
-3. Consider semantic similarity edges
-
-#### Phase 4: Visualization (Optional)
-1. Build simple web UI for graph exploration
-2. Or: Create Obsidian plugin that consumes the graph API
+1. **Hierarchical tags** (`#project/menos`) - Currently flat tags only
+2. **Inline hashtag extraction** (`#tag` in content) - Only frontmatter tags extracted
+3. **Semantic similarity edges** - Graph shows explicit links only, not similarity-based connections
+4. **Playlist support** - YouTube playlists not tracked
+5. **Graph clustering** - No topic cluster endpoint
+6. **Frontend visualization** - API only, no built-in UI (use external tools)
+7. **Obsidian plugin** - API-compatible but no official plugin
 
 ---
 
-### Quick Wins (Can implement immediately)
+### Test Coverage
 
-1. **Expose tags in content upload** - Just add `tags` to the Pydantic model and pass through
-2. **YouTube channel filtering** - Filter on `metadata.channel_id` in existing list endpoint
-3. **Tag listing endpoint** - Simple aggregation query on existing data
-4. **Frontmatter parsing** - Use `python-frontmatter` library during ingestion
-
----
-
-### Dependencies & Considerations
-
-- **Frontmatter parsing**: Add `python-frontmatter` to dependencies
-- **Link resolution**: Need title-to-ID index for wiki-link resolution
-- **Graph queries**: SurrealDB graph syntax differs from SQL - need to learn `->` and `<-` operators
-- **Embedding aggregation**: Currently embeddings are per-chunk; graph view may need document-level embeddings
-- **API versioning**: Consider `/api/v2/` for breaking changes to content model
+- 240 unit/integration tests passing
+- Tests cover all new endpoints, services, and edge cases
+- Link extraction tested with complex markdown (code blocks, nested brackets, etc.)
