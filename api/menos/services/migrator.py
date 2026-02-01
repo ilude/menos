@@ -53,10 +53,7 @@ class MigrationService:
 
     def _record_migration(self, name: str) -> None:
         """Record a migration as applied."""
-        self.db.query(
-            "CREATE _migrations SET name = $name, applied_at = $applied_at",
-            {"name": name, "applied_at": datetime.now(UTC).isoformat()},
-        )
+        self.db.create("_migrations", {"name": name, "applied_at": datetime.now(UTC)})
 
     def _get_pending_migrations(self) -> list[tuple[str, Path]]:
         """Get list of pending migrations sorted by timestamp.
