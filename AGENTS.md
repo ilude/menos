@@ -6,7 +6,7 @@ This file provides guidance to AI coding assistants working with code in this re
 
 **Menos** is a self-hosted content vault with semantic search. Centralized storage for YouTube transcripts, markdown files, and structured data accessible from multiple machines.
 
-**Status**: Phase 5 complete - Agentic search with LLM-powered query expansion and synthesis.
+**Status**: Phase 6 complete - PKM features (tags, frontmatter, links, graph visualization).
 
 **Stack**: Python 3.12+, FastAPI, SurrealDB, MinIO, Ollama, httpx, Pydantic
 
@@ -56,7 +56,8 @@ api/
     │   └── signer.py        # Sign requests with ed25519 keys
     ├── routers/             # FastAPI route handlers
     │   ├── auth.py          # Auth endpoints
-    │   ├── content.py       # Content CRUD
+    │   ├── content.py       # Content CRUD, tags, links/backlinks
+    │   ├── graph.py         # Knowledge graph visualization
     │   ├── search.py        # Semantic search
     │   └── youtube.py       # YouTube ingestion
     └── services/            # Business logic (no FastAPI dependencies)
@@ -64,6 +65,8 @@ api/
         ├── embeddings.py    # Ollama embedding generation
         ├── chunking.py      # Text chunking for embeddings
         ├── youtube.py       # YouTube transcript fetching
+        ├── frontmatter.py   # YAML frontmatter parsing
+        ├── linking.py       # Wiki-link and markdown link extraction
         ├── llm.py           # LLMProvider protocol, OllamaLLMProvider
         ├── llm_providers.py # OpenAI, Anthropic, OpenRouter providers
         ├── reranker.py      # RerankerProvider protocol and implementations
@@ -127,12 +130,31 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 
 ### Content
 - `GET /api/v1/content` - List content
+  - Query params: `tags` (comma-separated, AND logic), `content_type`
 - `GET /api/v1/content/{id}` - Get content metadata
 - `POST /api/v1/content` - Upload content
-- `DELETE /api/v1/content/{id}` - Delete content
+  - Query params: `tags` (repeatable)
+  - Auto-extracts frontmatter tags/title from markdown files
+  - Auto-extracts wiki-links `[[Title]]` and markdown links
+- `PATCH /api/v1/content/{id}` - Update metadata (tags, title, description)
+- `DELETE /api/v1/content/{id}` - Delete content and associated links
+
+### Tags
+- `GET /api/v1/tags` - List all tags with counts (sorted by count DESC)
+
+### Links
+- `GET /api/v1/content/{id}/links` - Forward links from this document
+- `GET /api/v1/content/{id}/backlinks` - Documents linking TO this document
+
+### Graph
+- `GET /api/v1/graph` - Full knowledge graph (nodes + edges)
+  - Query params: `tags`, `content_type`, `limit` (1-1000, default 500)
+- `GET /api/v1/graph/neighborhood/{id}` - Local neighborhood graph
+  - Query params: `depth` (1-3, default 1)
 
 ### Search
 - `POST /api/v1/search` - Semantic vector search
+  - Body: `{"query": "...", "tags": ["a", "b"], "limit": 20}`
 - `POST /api/v1/search/agentic` - Agentic search (query expansion → RRF → rerank → synthesis)
 
 ### YouTube
@@ -140,6 +162,48 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 - `POST /api/v1/youtube/upload` - Upload pre-fetched transcript (for IP-blocked servers)
 - `GET /api/v1/youtube/{video_id}` - Get video info
 - `GET /api/v1/youtube` - List ingested videos
+  - Query params: `channel_id` (filter by channel)
+- `GET /api/v1/youtube/channels` - List channels with video counts
+
+## PKM Features
+
+Menos includes Personal Knowledge Management features:
+
+### Tagging System
+- Tags can be provided via query parameter: `POST /content?tags=a&tags=b`
+- Tags extracted from YAML frontmatter are merged with explicit tags
+- Tags are deduplicated (explicit tags take precedence)
+- Filter content/search by tags with AND logic
+
+### Frontmatter Parsing
+Handled by `FrontmatterParser` service. Auto-extracts during markdown upload:
+```yaml
+---
+title: My Document
+tags:
+  - python
+  - api
+---
+```
+- `title` → populates content.title if not provided
+- `tags` → merged with query parameter tags
+
+### Link Extraction
+Handled by `LinkExtractor` service. Auto-extracts during upload:
+- Wiki-links: `[[Document Title]]` or `[[Title|display text]]`
+- Markdown links: `[text](internal-path)` (external URLs skipped)
+- Links in code blocks are ignored
+- Stored in `link` table with source/target references
+- Unresolved links (target doesn't exist yet) stored with null target
+
+### Graph Visualization
+Returns JSON suitable for D3.js, Cytoscape, or similar:
+```json
+{
+  "nodes": [{"id": "...", "title": "...", "content_type": "...", "tags": [...]}],
+  "edges": [{"source": "...", "target": "...", "link_type": "wiki", "link_text": "..."}]
+}
+```
 
 ## Code Style
 
