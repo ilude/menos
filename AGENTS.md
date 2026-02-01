@@ -6,7 +6,7 @@ This file provides guidance to AI coding assistants working with code in this re
 
 **Menos** is a self-hosted content vault with semantic search. Centralized storage for YouTube transcripts, markdown files, and structured data accessible from multiple machines.
 
-**Status**: Phase 4 complete - YouTube ingestion and semantic search implemented.
+**Status**: Phase 5 complete - Agentic search with LLM-powered query expansion and synthesis.
 
 **Stack**: Python 3.12+, FastAPI, SurrealDB, MinIO, Ollama, httpx, Pydantic
 
@@ -38,27 +38,38 @@ uv run python scripts/ingest_videos.py
 ## Architecture
 
 ```
-api/menos/
-├── main.py              # FastAPI app entry point
-├── config.py            # Pydantic Settings (env-based configuration)
-├── models.py            # Pydantic models for content and chunks
-├── auth/                # RFC 9421 HTTP signature authentication
-│   ├── dependencies.py  # FastAPI auth dependencies
-│   ├── keys.py          # Public key store
-│   └── verifier.py      # Signature verification
-├── client/              # Client-side request signing
-│   └── signer.py        # Sign requests with ed25519 keys
-├── routers/             # FastAPI route handlers
-│   ├── auth.py          # Auth endpoints
-│   ├── content.py       # Content CRUD
-│   ├── search.py        # Semantic search
-│   └── youtube.py       # YouTube ingestion
-└── services/            # Business logic (no FastAPI dependencies)
-    ├── storage.py       # MinIOStorage, SurrealDBRepository
-    ├── embeddings.py    # Ollama embedding generation
-    ├── chunking.py      # Text chunking for embeddings
-    ├── youtube.py       # YouTube transcript fetching
-    └── di.py            # Dependency injection helpers
+api/
+├── migrations/              # Database migrations (SurrealQL)
+│   ├── 20260201-100000_initial_schema.surql
+│   └── 20260201-100100_add_indexes.surql
+├── scripts/
+│   └── migrate.py           # Migration CLI tool
+└── menos/
+    ├── main.py              # FastAPI app entry point
+    ├── config.py            # Pydantic Settings (env-based configuration)
+    ├── models.py            # Pydantic models for content and chunks
+    ├── auth/                # RFC 9421 HTTP signature authentication
+    │   ├── dependencies.py  # FastAPI auth dependencies
+    │   ├── keys.py          # Public key store
+    │   └── verifier.py      # Signature verification
+    ├── client/              # Client-side request signing
+    │   └── signer.py        # Sign requests with ed25519 keys
+    ├── routers/             # FastAPI route handlers
+    │   ├── auth.py          # Auth endpoints
+    │   ├── content.py       # Content CRUD
+    │   ├── search.py        # Semantic search
+    │   └── youtube.py       # YouTube ingestion
+    └── services/            # Business logic (no FastAPI dependencies)
+        ├── storage.py       # MinIOStorage, SurrealDBRepository
+        ├── embeddings.py    # Ollama embedding generation
+        ├── chunking.py      # Text chunking for embeddings
+        ├── youtube.py       # YouTube transcript fetching
+        ├── llm.py           # LLMProvider protocol, OllamaLLMProvider
+        ├── llm_providers.py # OpenAI, Anthropic, OpenRouter providers
+        ├── reranker.py      # RerankerProvider protocol and implementations
+        ├── agent.py         # AgentService (3-stage agentic search)
+        ├── migrator.py      # Database migration service
+        └── di.py            # Dependency injection helpers
 ```
 
 ### Key Design Patterns
@@ -70,6 +81,11 @@ api/menos/
 3. **SurrealDB sync methods**: The surrealdb Python client uses synchronous methods (create, select, query) despite the async service layer.
 
 4. **Storage separation**: MinIO for file content, SurrealDB for metadata and embeddings.
+
+5. **Agentic search pipeline**: 3-stage search with LLM providers:
+   - Query expansion: LLM generates multiple search queries
+   - Retrieval: Multi-query vector search with RRF (Reciprocal Rank Fusion)
+   - Synthesis: LLM generates answer with citations from retrieved results
 
 ## Configuration
 
@@ -90,6 +106,15 @@ Environment variables (see `api/menos/config.py`):
 | `OLLAMA_URL` | Ollama API URL |
 | `OLLAMA_MODEL` | Embedding model name |
 | `AUTHORIZED_KEYS_PATH` | Path to authorized SSH keys |
+| `AGENT_EXPANSION_PROVIDER` | LLM for query expansion (ollama/openai/anthropic/openrouter/none) |
+| `AGENT_EXPANSION_MODEL` | Model name for expansion |
+| `AGENT_SYNTHESIS_PROVIDER` | LLM for synthesis (ollama/openai/anthropic/openrouter/none) |
+| `AGENT_SYNTHESIS_MODEL` | Model name for synthesis |
+| `AGENT_RERANK_PROVIDER` | Reranker (rerankers/llm/none) |
+| `AGENT_RERANK_MODEL` | Cross-encoder model for reranking |
+| `OPENAI_API_KEY` | OpenAI API key (optional) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (optional) |
+| `OPENROUTER_API_KEY` | OpenRouter API key (optional) |
 
 ## API Endpoints
 
@@ -108,6 +133,7 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 
 ### Search
 - `POST /api/v1/search` - Semantic vector search
+- `POST /api/v1/search/agentic` - Agentic search (query expansion → RRF → rerank → synthesis)
 
 ### YouTube
 - `POST /api/v1/youtube/ingest` - Ingest video by URL (fetches transcript server-side)
@@ -135,6 +161,83 @@ uv run pytest tests/unit/test_storage.py -v
 ```
 
 Tests use `MagicMock` for sync methods (SurrealDB, httpx response.json) and `AsyncMock` for async methods (httpx client.post).
+
+## Smoke Tests
+
+Smoke tests verify a live deployment works correctly.
+
+```bash
+cd api
+
+# Run all smoke tests
+uv run pytest tests/smoke/ -m smoke -v
+
+# Or use the CLI runner
+uv run python scripts/smoke_test.py --url http://api.example.com -v
+```
+
+Tests cover:
+- `/health` and `/ready` endpoints
+- Auth key listing and verification
+- Vector search endpoint
+- Agentic search endpoint (with timing validation)
+
+Environment variables:
+| Variable | Description |
+|----------|-------------|
+| `SMOKE_TEST_URL` | Target API URL |
+| `SMOKE_TEST_KEY_FILE` | SSH private key for auth |
+
+## Database Migrations
+
+Menos uses a custom migration system for SurrealDB schema changes. See [ADR-001](docs/adr/001-database-migrations.md) for design rationale.
+
+### Migration Files
+
+Migrations are versioned `.surql` files in `api/migrations/`:
+
+```
+api/migrations/
+├── 20260201-100000_initial_schema.surql
+├── 20260201-100100_add_indexes.surql
+└── ...
+```
+
+**Naming convention**: `YYYYMMDD-HHMMSS_description.surql`
+
+### Commands
+
+```bash
+cd api
+
+# Check migration status
+uv run python scripts/migrate.py status
+
+# Apply pending migrations
+uv run python scripts/migrate.py up
+
+# Create new migration file
+uv run python scripts/migrate.py create add_user_preferences
+```
+
+### How It Works
+
+1. Migrations are tracked in a `_migrations` table in SurrealDB
+2. Each migration runs once and is recorded with its timestamp
+3. Migrations execute in filename order (timestamp ensures correct sequence)
+4. All migrations use `IF NOT EXISTS` for idempotency
+
+### Writing Migrations
+
+```sql
+-- Migration: add_feature_flags
+-- Always use IF NOT EXISTS for safety
+
+DEFINE TABLE IF NOT EXISTS feature_flag SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS name ON feature_flag TYPE string;
+DEFINE FIELD IF NOT EXISTS enabled ON feature_flag TYPE bool DEFAULT false;
+DEFINE INDEX IF NOT EXISTS idx_feature_flag_name ON feature_flag FIELDS name UNIQUE;
+```
 
 ## Deployment
 
