@@ -91,10 +91,11 @@ class TestYouTubeChannelFiltering:
         mock_surreal_repo.list_content = AsyncMock(return_value=([video1, video2], 2))
         mock_surreal_repo.get_chunks = AsyncMock(return_value=[])
 
-        # Sign path without query params, then add params to request
+        # Sign path WITH query params to match server verification
         path = "/api/v1/youtube"
-        headers = request_signer.sign_request("GET", path, host="testserver")
-        response = client.get(path + "?channel_id=channel_a", headers=headers)
+        full_path = path + "?channel_id=channel_a"
+        headers = request_signer.sign_request("GET", full_path, host="testserver")
+        response = client.get(full_path, headers=headers)
 
         assert response.status_code == 200
         data = response.json()
@@ -123,8 +124,9 @@ class TestYouTubeChannelFiltering:
         mock_surreal_repo.get_chunks = AsyncMock(return_value=[])
 
         path = "/api/v1/youtube"
-        headers = request_signer.sign_request("GET", path, host="testserver")
-        response = client.get(path + "?channel_id=nonexistent", headers=headers)
+        full_path = path + "?channel_id=nonexistent"
+        headers = request_signer.sign_request("GET", full_path, host="testserver")
+        response = client.get(full_path, headers=headers)
 
         assert response.status_code == 200
         data = response.json()

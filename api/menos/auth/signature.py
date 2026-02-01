@@ -103,7 +103,11 @@ class SignatureVerifier:
             if component == "@method":
                 lines.append(f'"@method": {request.method}')
             elif component == "@path":
-                lines.append(f'"@path": {request.url.path}')
+                # Per RFC 9421, @path includes query string
+                path = request.url.path
+                if request.url.query:
+                    path = f"{path}?{request.url.query}"
+                lines.append(f'"@path": {path}')
             elif component == "@authority":
                 lines.append(f'"@authority": {request.headers.get("host", "")}')
             elif component == "@target-uri":

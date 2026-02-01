@@ -794,6 +794,8 @@ rerankers = [
 [package.dev-dependencies]
 dev = [
     { name = "cryptography" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
@@ -819,7 +821,11 @@ requires-dist = [
 provides-extras = ["dev", "rerankers"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "cryptography", specifier = ">=46.0.4" }]
+dev = [
+    { name = "cryptography", specifier = ">=46.0.4" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+]
 
 [[package]]
 name = "minio"

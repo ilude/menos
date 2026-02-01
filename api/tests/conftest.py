@@ -87,6 +87,8 @@ def mock_surreal_repo():
     repo.get_chunks = AsyncMock(return_value=[])
     repo.create_chunk = AsyncMock()
     repo.vector_search = AsyncMock(return_value=[])
+    repo.get_graph_data = AsyncMock(return_value=([], []))
+    repo.get_neighborhood = AsyncMock(return_value=([], []))
     return repo
 
 
@@ -186,7 +188,15 @@ class AuthedTestClient:
         self.signer = signer
 
     def get(self, path: str, **kwargs):
-        headers = self.signer.sign_request("GET", path, host="testserver")
+        # Build full path with query params for signature
+        params = kwargs.get("params")
+        sign_path = path
+        if params:
+            from urllib.parse import urlencode
+            query_string = urlencode(params)
+            sign_path = f"{path}?{query_string}"
+
+        headers = self.signer.sign_request("GET", sign_path, host="testserver")
         kwargs.setdefault("headers", {}).update(headers)
         return self.client.get(path, **kwargs)
 
