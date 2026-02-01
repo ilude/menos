@@ -256,3 +256,340 @@ class TestLinkExtraction:
         assert "Python" in targets
         assert "Django" in targets
         assert "Should not extract" not in targets
+
+
+class TestLinksEndpoints:
+    """Tests for links and backlinks endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_links_returns_forward_links(self):
+        """Test that GET /content/{id}/links returns forward links with target metadata."""
+        from menos.models import ContentMetadata, LinkModel
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        # Mock content exists
+        source_content = ContentMetadata(
+            id="source123",
+            content_type="document",
+            title="Source Doc",
+            mime_type="text/markdown",
+            file_size=100,
+            file_path="docs/source.md",
+        )
+
+        target_content = ContentMetadata(
+            id="target456",
+            content_type="document",
+            title="Target Doc",
+            mime_type="text/markdown",
+            file_size=200,
+            file_path="docs/target.md",
+        )
+
+        # Mock repository methods
+        async def mock_get_content(content_id: str):
+            if content_id == "source123":
+                return source_content
+            elif content_id == "target456":
+                return target_content
+            return None
+
+        repo.get_content = AsyncMock(side_effect=mock_get_content)
+
+        # Mock links
+        links = [
+            LinkModel(
+                id="link1",
+                source="source123",
+                target="target456",
+                link_text="Target Doc",
+                link_type="wiki",
+            )
+        ]
+        repo.get_links_by_source = AsyncMock(return_value=links)
+
+        # Call endpoint
+        from menos.routers.content import get_content_links
+
+        response = await get_content_links("source123", "test-key", repo)
+
+        assert len(response.links) == 1
+        assert response.links[0].link_text == "Target Doc"
+        assert response.links[0].link_type == "wiki"
+        assert response.links[0].target is not None
+        assert response.links[0].target.id == "target456"
+        assert response.links[0].target.title == "Target Doc"
+        assert response.links[0].target.content_type == "document"
+
+    @pytest.mark.asyncio
+    async def test_get_links_handles_unresolved_targets(self):
+        """Test that links with no target (unresolved) are handled gracefully."""
+        from menos.models import ContentMetadata, LinkModel
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        source_content = ContentMetadata(
+            id="source123",
+            content_type="document",
+            title="Source Doc",
+            mime_type="text/markdown",
+            file_size=100,
+            file_path="docs/source.md",
+        )
+
+        repo.get_content = AsyncMock(return_value=source_content)
+
+        # Link with no target (unresolved)
+        links = [
+            LinkModel(
+                id="link1",
+                source="source123",
+                target=None,
+                link_text="Unresolved",
+                link_type="wiki",
+            )
+        ]
+        repo.get_links_by_source = AsyncMock(return_value=links)
+
+        from menos.routers.content import get_content_links
+
+        response = await get_content_links("source123", "test-key", repo)
+
+        assert len(response.links) == 1
+        assert response.links[0].link_text == "Unresolved"
+        assert response.links[0].target is None
+
+    @pytest.mark.asyncio
+    async def test_get_links_404_when_content_not_found(self):
+        """Test that GET /content/{id}/links returns 404 when content doesn't exist."""
+        from fastapi import HTTPException
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        repo.get_content = AsyncMock(return_value=None)
+
+        from menos.routers.content import get_content_links
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_content_links("nonexistent", "test-key", repo)
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Content not found"
+
+    @pytest.mark.asyncio
+    async def test_get_backlinks_returns_source_metadata(self):
+        """Test that GET /content/{id}/backlinks returns backlinks with source metadata."""
+        from menos.models import ContentMetadata, LinkModel
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        # Mock content exists
+        target_content = ContentMetadata(
+            id="target456",
+            content_type="document",
+            title="Target Doc",
+            mime_type="text/markdown",
+            file_size=200,
+            file_path="docs/target.md",
+        )
+
+        source_content = ContentMetadata(
+            id="source123",
+            content_type="document",
+            title="Source Doc",
+            mime_type="text/markdown",
+            file_size=100,
+            file_path="docs/source.md",
+        )
+
+        # Mock repository methods
+        async def mock_get_content(content_id: str):
+            if content_id == "target456":
+                return target_content
+            elif content_id == "source123":
+                return source_content
+            return None
+
+        repo.get_content = AsyncMock(side_effect=mock_get_content)
+
+        # Mock backlinks
+        backlinks = [
+            LinkModel(
+                id="link1",
+                source="source123",
+                target="target456",
+                link_text="Target Doc",
+                link_type="wiki",
+            )
+        ]
+        repo.get_links_by_target = AsyncMock(return_value=backlinks)
+
+        # Call endpoint
+        from menos.routers.content import get_content_backlinks
+
+        response = await get_content_backlinks("target456", "test-key", repo)
+
+        assert len(response.links) == 1
+        assert response.links[0].link_text == "Target Doc"
+        assert response.links[0].link_type == "wiki"
+        assert response.links[0].source is not None
+        assert response.links[0].source.id == "source123"
+        assert response.links[0].source.title == "Source Doc"
+        assert response.links[0].source.content_type == "document"
+
+    @pytest.mark.asyncio
+    async def test_get_backlinks_404_when_content_not_found(self):
+        """Test that GET /content/{id}/backlinks returns 404 when content doesn't exist."""
+        from fastapi import HTTPException
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        repo.get_content = AsyncMock(return_value=None)
+
+        from menos.routers.content import get_content_backlinks
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_content_backlinks("nonexistent", "test-key", repo)
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Content not found"
+
+    @pytest.mark.asyncio
+    async def test_get_backlinks_empty_when_no_backlinks(self):
+        """Test that empty list is returned when document has no backlinks."""
+        from menos.models import ContentMetadata
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        content = ContentMetadata(
+            id="doc123",
+            content_type="document",
+            title="Doc",
+            mime_type="text/markdown",
+            file_size=100,
+            file_path="docs/doc.md",
+        )
+
+        repo.get_content = AsyncMock(return_value=content)
+        repo.get_links_by_target = AsyncMock(return_value=[])
+
+        from menos.routers.content import get_content_backlinks
+
+        response = await get_content_backlinks("doc123", "test-key", repo)
+
+        assert len(response.links) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_links_empty_when_no_links(self):
+        """Test that empty list is returned when document has no forward links."""
+        from menos.models import ContentMetadata
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        content = ContentMetadata(
+            id="doc123",
+            content_type="document",
+            title="Doc",
+            mime_type="text/markdown",
+            file_size=100,
+            file_path="docs/doc.md",
+        )
+
+        repo.get_content = AsyncMock(return_value=content)
+        repo.get_links_by_source = AsyncMock(return_value=[])
+
+        from menos.routers.content import get_content_links
+
+        response = await get_content_links("doc123", "test-key", repo)
+
+        assert len(response.links) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_links_multiple_links(self):
+        """Test that multiple links are returned correctly."""
+        from menos.models import ContentMetadata, LinkModel
+        from menos.services.storage import SurrealDBRepository
+
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        source_content = ContentMetadata(
+            id="source123",
+            content_type="document",
+            title="Source Doc",
+            mime_type="text/markdown",
+            file_size=100,
+            file_path="docs/source.md",
+        )
+
+        target1 = ContentMetadata(
+            id="target1",
+            content_type="document",
+            title="Target 1",
+            mime_type="text/markdown",
+            file_size=200,
+            file_path="docs/target1.md",
+        )
+
+        target2 = ContentMetadata(
+            id="target2",
+            content_type="note",
+            title="Target 2",
+            mime_type="text/markdown",
+            file_size=150,
+            file_path="notes/target2.md",
+        )
+
+        async def mock_get_content(content_id: str):
+            if content_id == "source123":
+                return source_content
+            elif content_id == "target1":
+                return target1
+            elif content_id == "target2":
+                return target2
+            return None
+
+        repo.get_content = AsyncMock(side_effect=mock_get_content)
+
+        links = [
+            LinkModel(
+                id="link1",
+                source="source123",
+                target="target1",
+                link_text="Target 1",
+                link_type="wiki",
+            ),
+            LinkModel(
+                id="link2",
+                source="source123",
+                target="target2",
+                link_text="Target 2",
+                link_type="markdown",
+            ),
+        ]
+        repo.get_links_by_source = AsyncMock(return_value=links)
+
+        from menos.routers.content import get_content_links
+
+        response = await get_content_links("source123", "test-key", repo)
+
+        assert len(response.links) == 2
+        assert response.links[0].target.id == "target1"
+        assert response.links[0].target.content_type == "document"
+        assert response.links[1].target.id == "target2"
+        assert response.links[1].target.content_type == "note"

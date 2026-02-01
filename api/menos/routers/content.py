@@ -64,6 +64,29 @@ class TagList(BaseModel):
     tags: list[Tag]
 
 
+class LinkedDocument(BaseModel):
+    """Metadata about a linked document."""
+
+    id: str
+    title: str | None = None
+    content_type: str
+
+
+class LinkResponse(BaseModel):
+    """Response for a single link with target/source metadata."""
+
+    link_text: str
+    link_type: str
+    target: LinkedDocument | None = None
+    source: LinkedDocument | None = None
+
+
+class LinksListResponse(BaseModel):
+    """Response for links list."""
+
+    links: list[LinkResponse]
+
+
 @router.get("/tags", response_model=TagList)
 async def list_tags(
     key_id: AuthenticatedKeyId,
@@ -292,3 +315,91 @@ async def delete_content(
     await surreal_repo.delete_content(content_id)
 
     return {"status": "deleted", "id": content_id}
+
+
+@router.get("/{content_id}/links", response_model=LinksListResponse)
+async def get_content_links(
+    content_id: str,
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get forward links from this document.
+
+    Returns links where this document is the source, including metadata
+    about the target documents.
+    """
+    # Verify content exists
+    content = await surreal_repo.get_content(content_id)
+    if not content:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    # Get links
+    links = await surreal_repo.get_links_by_source(content_id)
+
+    # Build response with target metadata
+    link_responses = []
+    for link in links:
+        target_doc = None
+        if link.target:
+            target_metadata = await surreal_repo.get_content(link.target)
+            if target_metadata:
+                target_doc = LinkedDocument(
+                    id=target_metadata.id or link.target,
+                    title=target_metadata.title,
+                    content_type=target_metadata.content_type,
+                )
+
+        link_responses.append(
+            LinkResponse(
+                link_text=link.link_text,
+                link_type=link.link_type,
+                target=target_doc,
+            )
+        )
+
+    return LinksListResponse(links=link_responses)
+
+
+@router.get("/{content_id}/backlinks", response_model=LinksListResponse)
+async def get_content_backlinks(
+    content_id: str,
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get backlinks to this document.
+
+    Returns links where this document is the target, including metadata
+    about the source documents.
+    """
+    # Verify content exists
+    content = await surreal_repo.get_content(content_id)
+    if not content:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    # Get backlinks
+    backlinks = await surreal_repo.get_links_by_target(content_id)
+
+    # Build response with source metadata
+    link_responses = []
+    for link in backlinks:
+        source_doc = None
+        if link.source:
+            source_metadata = await surreal_repo.get_content(link.source)
+            if source_metadata:
+                source_doc = LinkedDocument(
+                    id=source_metadata.id or link.source,
+                    title=source_metadata.title,
+                    content_type=source_metadata.content_type,
+                )
+
+        link_responses.append(
+            LinkResponse(
+                link_text=link.link_text,
+                link_type=link.link_type,
+                source=source_doc,
+            )
+        )
+
+    return LinksListResponse(links=link_responses)

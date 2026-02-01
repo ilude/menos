@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from surrealdb import Surreal
 
 from menos.config import get_settings
-from menos.routers import auth, content, health, search, youtube
+from menos.routers import auth, content, graph, health, search, youtube
 from menos.services.migrator import MigrationService
 
 logger = logging.getLogger(__name__)
@@ -65,5 +65,6 @@ app.include_router(auth.router, prefix="/api/v1")
 
 # Protected endpoints
 app.include_router(content.router, prefix="/api/v1")
+app.include_router(graph.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(youtube.router, prefix="/api/v1")
