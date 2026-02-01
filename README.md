@@ -4,7 +4,7 @@ Self-hosted content vault with semantic search. Centralized store for markdown/f
 
 ## Status
 
-**Phase 4 Complete** - YouTube ingestion working, semantic search implemented.
+**Phase 5 Complete** - Agentic search with LLM-powered query expansion and answer synthesis.
 
 ## Architecture
 
@@ -66,6 +66,27 @@ cd infra/ansible
 docker compose run --rm ansible ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml
 ```
 
+### Smoke Tests
+
+Run smoke tests against a deployed API:
+
+```bash
+cd api
+
+# Against local development server
+uv run python scripts/smoke_test.py
+
+# Against production
+uv run python scripts/smoke_test.py --url https://api.example.com
+
+# With custom SSH key
+uv run python scripts/smoke_test.py --key-file /path/to/key -v
+```
+
+Environment variables:
+- `SMOKE_TEST_URL` - API base URL (default: http://localhost:8000)
+- `SMOKE_TEST_KEY_FILE` - SSH private key path (default: ~/.ssh/id_ed25519)
+
 ## API Endpoints
 
 | Method | Endpoint | Auth | Description |
@@ -80,6 +101,7 @@ docker compose run --rm ansible ansible-playbook -i inventory/hosts.yml playbook
 | POST | `/api/v1/content` | Yes | Upload content |
 | DELETE | `/api/v1/content/{id}` | Yes | Delete content |
 | POST | `/api/v1/search` | Yes | Semantic vector search |
+| POST | `/api/v1/search/agentic` | Yes | Agentic search with query expansion and synthesis |
 | POST | `/api/v1/youtube/ingest` | Yes | Ingest YouTube video by URL |
 | POST | `/api/v1/youtube/upload` | Yes | Upload pre-fetched transcript |
 | GET | `/api/v1/youtube/{video_id}` | Yes | Get YouTube video info |
@@ -121,6 +143,11 @@ Environment variables (set in `.env`):
 | `MINIO_ACCESS_KEY` | MinIO access key |
 | `MINIO_SECRET_KEY` | MinIO secret key |
 | `OLLAMA_URL` | Ollama API URL |
+| `AGENT_EXPANSION_PROVIDER` | LLM for query expansion (ollama/openai/anthropic/none) |
+| `AGENT_SYNTHESIS_PROVIDER` | LLM for answer synthesis (ollama/openai/anthropic/none) |
+| `AGENT_RERANK_PROVIDER` | Reranker backend (rerankers/llm/none) |
+| `OPENAI_API_KEY` | OpenAI API key (if using OpenAI providers) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (if using Anthropic providers) |
 
 ## Implementation Status
 
@@ -130,7 +157,7 @@ Environment variables (set in `.env`):
 - [x] Phase 2: Storage (MinIO + SurrealDB integration)
 - [x] Phase 3: Search (Ollama embeddings + chunking)
 - [x] Phase 4: YouTube ingestion
-- [ ] Phase 5: Agentic search
+- [x] Phase 5: Agentic search (query expansion, reranking, synthesis)
 
 ## License
 
