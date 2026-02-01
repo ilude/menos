@@ -1,6 +1,5 @@
 """Unit tests for chunking service."""
 
-import pytest
 
 from menos.services.chunking import ChunkingService
 

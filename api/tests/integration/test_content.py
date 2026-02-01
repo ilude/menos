@@ -1,12 +1,6 @@
 """Integration tests for content endpoints."""
 
 import io
-from unittest.mock import AsyncMock, patch
-
-import pytest
-
-from menos.models import ContentMetadata
-from tests.conftest import AuthedTestClient
 
 
 class TestContentEndpoints:

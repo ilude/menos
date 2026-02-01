@@ -2,7 +2,7 @@
 
 import pytest
 
-from menos.services.youtube import YouTubeService, TranscriptSegment, YouTubeTranscript
+from menos.services.youtube import TranscriptSegment, YouTubeService, YouTubeTranscript
 
 
 class TestYouTubeService:
