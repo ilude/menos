@@ -1,9 +1,14 @@
 """Configuration settings."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
+
+# Type aliases for agent configuration
+LLMProviderType = Literal["ollama", "openai", "anthropic", "openrouter", "none"]
+RerankerProviderType = Literal["rerankers", "llm", "none"]
 
 
 class Settings(BaseSettings):
@@ -40,5 +45,23 @@ class Settings(BaseSettings):
     # YouTube Data API
     youtube_api_key: str | None = None
 
+    # Agent settings
+    agent_expansion_provider: LLMProviderType = "ollama"
+    agent_expansion_model: str = "qwen3:latest"
+    agent_rerank_provider: RerankerProviderType = "none"
+    agent_rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    agent_synthesis_provider: LLMProviderType = "ollama"
+    agent_synthesis_model: str = "qwen3:latest"
+
+    # Cloud LLM API keys
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    openrouter_api_key: str | None = None
+
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get application settings (for dependency injection)."""
+    return settings
