@@ -1,10 +1,10 @@
 -- Add indexes for query performance
 
 -- Vector index on chunk embeddings for fast similarity search
--- Uses MTREE (M-tree) index with cosine distance for 384-dimensional mxbai-embed-large vectors
+-- Uses MTREE (M-tree) index with cosine distance for 1024-dimensional mxbai-embed-large vectors
 DEFINE INDEX IF NOT EXISTS idx_chunk_embedding ON chunk
     FIELDS embedding
-    MTREE DIMENSION 384
+    MTREE DIMENSION 1024
     DIST COSINE;
 
 -- BTree index on chunk.content_id for fast chunk retrieval by content
