@@ -249,3 +249,37 @@ docker compose run --rm ansible ansible-playbook -i inventory/hosts.yml playbook
 ```
 
 Remote stack runs: SurrealDB, MinIO, Ollama, menos-api containers.
+
+### Deployment Flow
+
+1. **Ansible deploys** → copies files, rebuilds containers
+2. **Container restarts** → menos-api starts
+3. **Migrations run automatically** → on app startup via lifespan handler
+4. **App serves traffic** → migrations logged, failures don't crash app
+
+### Testing Migrations
+
+To test migration system changes:
+
+1. Make changes locally, commit and push
+2. Deploy via Ansible (or manually sync files + rebuild)
+3. Check logs: `docker compose logs menos-api`
+4. Verify: `docker exec menos-api python -c "from menos.services.migrator import MigrationService; ..."`
+
+**Note**: Large index operations (e.g., MTREE on 45k+ vectors) may timeout on app startup. These should be run manually with extended timeouts via curl or after initial deployment.
+
+### Manual Deployment (without Ansible)
+
+If Ansible isn't available, sync files directly:
+
+```bash
+# Copy updated files
+scp -r api/menos/ user@server:/apps/menos/api/
+scp -r api/migrations/ user@server:/apps/menos/api/
+
+# Rebuild and restart
+ssh user@server "cd /apps/menos && docker compose build menos-api && docker compose up -d menos-api"
+
+# Check logs
+ssh user@server "docker compose -f /apps/menos/docker-compose.yml logs --tail=50 menos-api"
+```
