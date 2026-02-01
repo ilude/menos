@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, Query, UploadFile
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
