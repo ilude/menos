@@ -18,6 +18,9 @@ dependencies = [
     "google-api-python-client>=2.0.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["menos*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
