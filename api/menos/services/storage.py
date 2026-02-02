@@ -7,7 +7,15 @@ from minio import Minio
 from minio.error import S3Error
 from surrealdb import Surreal
 
-from menos.models import ChunkModel, ContentMetadata, LinkModel
+from menos.models import (
+    ChunkModel,
+    ContentEntityEdge,
+    ContentMetadata,
+    EntityModel,
+    EntityType,
+    LinkModel,
+)
+from menos.services.normalization import normalize_name
 
 
 class MinIOStorage:
@@ -607,3 +615,383 @@ class SurrealDBRepository:
         edges = list(all_edges.values())
 
         return nodes, edges
+
+    # ==================== Entity Methods ====================
+
+    def _extract_entity_id(self, record_id) -> str:
+        """Extract entity ID string from SurrealDB record ID."""
+        if hasattr(record_id, "record_id"):
+            return str(record_id.record_id)
+        elif hasattr(record_id, "id"):
+            return str(record_id.id)
+        else:
+            return str(record_id).split(":")[-1]
+
+    def _parse_entity(self, item: dict) -> EntityModel:
+        """Parse a raw entity record into EntityModel."""
+        item_copy = dict(item)
+        if "id" in item_copy:
+            item_copy["id"] = self._extract_entity_id(item_copy["id"])
+        return EntityModel(**item_copy)
+
+    def _parse_content_entity_edge(self, item: dict) -> ContentEntityEdge:
+        """Parse a raw content_entity record into ContentEntityEdge."""
+        item_copy = dict(item)
+        if "id" in item_copy:
+            item_copy["id"] = self._extract_entity_id(item_copy["id"])
+        if "content_id" in item_copy:
+            cid = item_copy["content_id"]
+            item_copy["content_id"] = cid.id if hasattr(cid, "id") else str(cid).split(":")[-1]
+        if "entity_id" in item_copy:
+            eid = item_copy["entity_id"]
+            item_copy["entity_id"] = eid.id if hasattr(eid, "id") else str(eid).split(":")[-1]
+        return ContentEntityEdge(**item_copy)
+
+    async def create_entity(self, entity: EntityModel) -> EntityModel:
+        """Create a new entity.
+
+        Args:
+            entity: Entity to create
+
+        Returns:
+            Created entity with ID
+        """
+        now = datetime.now(UTC)
+        entity.created_at = now
+        entity.updated_at = now
+
+        # Ensure normalized_name is set
+        if not entity.normalized_name:
+            entity.normalized_name = normalize_name(entity.name)
+
+        result = self.db.create("entity", entity.model_dump(exclude_none=True, mode="json"))
+        if result:
+            record = result[0] if isinstance(result, list) else result
+            entity.id = self._extract_entity_id(record["id"])
+        return entity
+
+    async def get_entity(self, entity_id: str) -> EntityModel | None:
+        """Get entity by ID.
+
+        Args:
+            entity_id: Entity ID
+
+        Returns:
+            Entity or None if not found
+        """
+        result = self.db.select(f"entity:{entity_id}")
+        if result:
+            return self._parse_entity(result[0] if isinstance(result, list) else result)
+        return None
+
+    async def find_entity_by_normalized_name(
+        self,
+        normalized_name: str,
+        entity_type: EntityType | None = None,
+    ) -> EntityModel | None:
+        """Find entity by normalized name.
+
+        Args:
+            normalized_name: Normalized entity name
+            entity_type: Optional filter by entity type
+
+        Returns:
+            Entity or None if not found
+        """
+        params: dict = {"normalized_name": normalized_name}
+        query = "SELECT * FROM entity WHERE normalized_name = $normalized_name"
+
+        if entity_type:
+            query += " AND entity_type = $entity_type"
+            params["entity_type"] = entity_type.value
+
+        query += " LIMIT 1"
+        result = self.db.query(query, params)
+        raw_items = self._parse_query_result(result)
+
+        if raw_items:
+            return self._parse_entity(raw_items[0])
+        return None
+
+    async def find_entity_by_alias(self, alias: str) -> EntityModel | None:
+        """Find entity that has this alias in metadata.aliases.
+
+        Args:
+            alias: Alias to search for
+
+        Returns:
+            Entity or None if not found
+        """
+        normalized_alias = normalize_name(alias)
+        result = self.db.query(
+            "SELECT * FROM entity WHERE metadata.aliases CONTAINS $alias LIMIT 1",
+            {"alias": normalized_alias},
+        )
+        raw_items = self._parse_query_result(result)
+
+        if raw_items:
+            return self._parse_entity(raw_items[0])
+        return None
+
+    async def update_entity(self, entity_id: str, updates: dict) -> EntityModel | None:
+        """Update entity fields.
+
+        Args:
+            entity_id: Entity ID
+            updates: Dictionary of fields to update
+
+        Returns:
+            Updated entity or None if not found
+        """
+        updates["updated_at"] = datetime.now(UTC)
+        result = self.db.update(f"entity:{entity_id}", updates)
+        if result:
+            record = result[0] if isinstance(result, list) else result
+            return self._parse_entity(record)
+        return None
+
+    async def delete_entity(self, entity_id: str) -> None:
+        """Delete entity and all its edges.
+
+        Args:
+            entity_id: Entity ID
+        """
+        # Delete all edges to this entity
+        self.db.query(
+            "DELETE (SELECT id FROM content_entity WHERE entity_id = $entity_id)",
+            {"entity_id": f"entity:{entity_id}"},
+        )
+        # Delete the entity
+        self.db.delete(f"entity:{entity_id}")
+
+    async def list_entities(
+        self,
+        entity_type: EntityType | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[EntityModel], int]:
+        """List entities with optional filtering.
+
+        Args:
+            entity_type: Optional filter by entity type
+            limit: Maximum number to return
+            offset: Number to skip
+
+        Returns:
+            Tuple of (entities, count)
+        """
+        params: dict = {"limit": limit, "offset": offset}
+        where_clause = ""
+
+        if entity_type:
+            where_clause = " WHERE entity_type = $entity_type"
+            params["entity_type"] = entity_type.value
+
+        result = self.db.query(
+            f"SELECT * FROM entity{where_clause} ORDER BY name LIMIT $limit START $offset",
+            params,
+        )
+        raw_items = self._parse_query_result(result)
+        entities = [self._parse_entity(item) for item in raw_items]
+        return entities, len(entities)
+
+    async def list_all_entities(self) -> list[EntityModel]:
+        """List all entities (for caching in keyword matcher).
+
+        Returns:
+            List of all entities
+        """
+        result = self.db.query("SELECT * FROM entity")
+        raw_items = self._parse_query_result(result)
+        return [self._parse_entity(item) for item in raw_items]
+
+    async def create_content_entity_edge(self, edge: ContentEntityEdge) -> ContentEntityEdge:
+        """Create a content-entity edge.
+
+        Args:
+            edge: Edge to create
+
+        Returns:
+            Created edge with ID
+        """
+        edge.created_at = datetime.now(UTC)
+        edge_data = edge.model_dump(exclude_none=True, mode="json")
+
+        # Convert IDs to record references
+        edge_data["content_id"] = f"content:{edge_data['content_id']}"
+        edge_data["entity_id"] = f"entity:{edge_data['entity_id']}"
+
+        result = self.db.create("content_entity", edge_data)
+        if result:
+            record = result[0] if isinstance(result, list) else result
+            edge.id = self._extract_entity_id(record["id"])
+        return edge
+
+    async def get_entities_for_content(self, content_id: str) -> list[tuple[EntityModel, ContentEntityEdge]]:
+        """Get all entities linked to a content item.
+
+        Args:
+            content_id: Content ID
+
+        Returns:
+            List of (entity, edge) tuples
+        """
+        result = self.db.query(
+            """
+            SELECT *, entity_id.* AS entity FROM content_entity
+            WHERE content_id = $content_id
+            """,
+            {"content_id": f"content:{content_id}"},
+        )
+        raw_items = self._parse_query_result(result)
+
+        entities_with_edges = []
+        for item in raw_items:
+            # Extract the nested entity data
+            entity_data = item.pop("entity", None)
+            if entity_data:
+                entity = self._parse_entity(entity_data)
+                edge = self._parse_content_entity_edge(item)
+                entities_with_edges.append((entity, edge))
+        return entities_with_edges
+
+    async def get_content_for_entity(
+        self,
+        entity_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[tuple[ContentMetadata, ContentEntityEdge]]:
+        """Get all content linked to an entity.
+
+        Args:
+            entity_id: Entity ID
+            limit: Maximum number to return
+            offset: Number to skip
+
+        Returns:
+            List of (content, edge) tuples
+        """
+        result = self.db.query(
+            """
+            SELECT *, content_id.* AS content FROM content_entity
+            WHERE entity_id = $entity_id
+            LIMIT $limit START $offset
+            """,
+            {"entity_id": f"entity:{entity_id}", "limit": limit, "offset": offset},
+        )
+        raw_items = self._parse_query_result(result)
+
+        content_with_edges = []
+        for item in raw_items:
+            content_data = item.pop("content", None)
+            if content_data:
+                # Parse content
+                if "id" in content_data and hasattr(content_data["id"], "id"):
+                    content_data["id"] = content_data["id"].id
+                content = ContentMetadata(**content_data)
+                edge = self._parse_content_entity_edge(item)
+                content_with_edges.append((content, edge))
+        return content_with_edges
+
+    async def delete_content_entity_edges(self, content_id: str) -> None:
+        """Delete all entity edges for a content item.
+
+        Args:
+            content_id: Content ID
+        """
+        self.db.query(
+            "DELETE (SELECT id FROM content_entity WHERE content_id = $content_id)",
+            {"content_id": f"content:{content_id}"},
+        )
+
+    async def find_or_create_entity(
+        self,
+        name: str,
+        entity_type: EntityType,
+        **kwargs,
+    ) -> tuple[EntityModel, bool]:
+        """Find existing entity or create new one.
+
+        Args:
+            name: Entity name
+            entity_type: Entity type
+            **kwargs: Additional fields for entity creation
+
+        Returns:
+            Tuple of (entity, was_created)
+        """
+        normalized = normalize_name(name)
+
+        # Try to find by normalized name
+        existing = await self.find_entity_by_normalized_name(normalized, entity_type)
+        if existing:
+            return existing, False
+
+        # Try to find by alias
+        existing = await self.find_entity_by_alias(name)
+        if existing and existing.entity_type == entity_type:
+            return existing, False
+
+        # Create new entity
+        entity = EntityModel(
+            entity_type=entity_type,
+            name=name,
+            normalized_name=normalized,
+            **kwargs,
+        )
+        created = await self.create_entity(entity)
+        return created, True
+
+    async def update_content_extraction_status(
+        self,
+        content_id: str,
+        status: str,
+    ) -> None:
+        """Update entity extraction status on content.
+
+        Args:
+            content_id: Content ID
+            status: Status string (pending, processing, completed, failed)
+        """
+        self.db.query(
+            """
+            UPDATE content SET
+                entity_extraction_status = $status,
+                entity_extraction_at = time::now(),
+                updated_at = time::now()
+            WHERE id = $content_id
+            """,
+            {"content_id": f"content:{content_id}", "status": status},
+        )
+
+    async def get_topic_hierarchy(self) -> list[EntityModel]:
+        """Get all topic entities for building hierarchy view.
+
+        Returns:
+            List of topic entities
+        """
+        result = self.db.query(
+            "SELECT * FROM entity WHERE entity_type = 'topic' ORDER BY hierarchy, name"
+        )
+        raw_items = self._parse_query_result(result)
+        return [self._parse_entity(item) for item in raw_items]
+
+    async def find_potential_duplicates(self, max_distance: int = 1) -> list[list[EntityModel]]:
+        """Find potential duplicate entities based on normalized names.
+
+        This loads all entities and uses Levenshtein distance for comparison.
+
+        Args:
+            max_distance: Maximum edit distance to consider as duplicate
+
+        Returns:
+            List of groups of potential duplicates
+        """
+        from menos.services.normalization import find_near_duplicates
+
+        all_entities = await self.list_all_entities()
+        return find_near_duplicates(
+            all_entities,
+            lambda e: e.normalized_name,
+            max_distance,
+        )

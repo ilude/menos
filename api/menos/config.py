@@ -14,7 +14,7 @@ RerankerProviderType = Literal["rerankers", "llm", "none"]
 class Settings(BaseSettings):
     """Application settings loaded from environment."""
 
-    model_config = ConfigDict(env_file=".env")
+    model_config = ConfigDict(env_file=".env", extra="ignore")
 
     # SurrealDB
     surrealdb_url: str = "http://localhost:8000"
@@ -57,6 +57,19 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None
+
+    # Entity Extraction
+    entity_extraction_enabled: bool = True
+    entity_extraction_provider: LLMProviderType = "ollama"
+    entity_extraction_model: str = "qwen3:latest"
+
+    # API Keys for Metadata Fetching (optional)
+    semantic_scholar_api_key: str | None = None
+
+    # Extraction Limits
+    entity_max_topics_per_content: int = 7
+    entity_min_confidence: float = 0.6
+    entity_fetch_external_metadata: bool = True
 
 
 settings = Settings()

@@ -71,13 +71,23 @@
         state: directory
         mode: "0755"
 
-    - name: Sync API source files
+    - name: Sync API menos directory
+      ansible.builtin.shell: |
+        rsync -av --delete \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          -e "ssh -o StrictHostKeyChecking=no" \
+          /project/api/menos/ {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/api/menos/
+      delegate_to: localhost
+      register: rsync_result
+      changed_when: rsync_result.stdout_lines | length > 4
+
+    - name: Sync API config files
       ansible.builtin.copy:
         src: "/project/api/{{ item }}"
         dest: "{{ deploy_path }}/api/"
         mode: "0644"
       loop:
-        - menos/
         - pyproject.toml
         - Dockerfile
 

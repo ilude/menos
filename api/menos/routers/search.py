@@ -18,6 +18,9 @@ class SearchQuery(BaseModel):
     query: str
     content_type: str | None = None
     tags: list[str] | None = None
+    entities: list[str] | None = None  # Entity IDs to filter by
+    entity_types: list[str] | None = None  # Filter by entity type
+    topics: list[str] | None = None  # Filter by topic hierarchy (e.g., "AI > LLMs")
     limit: int = 20
 
 
@@ -83,7 +86,15 @@ async def vector_search(
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
 ):
-    """Semantic vector search across content."""
+    """Semantic vector search across content.
+
+    Supports filtering by:
+    - content_type: Type of content (youtube, markdown, etc.)
+    - tags: Content must have ALL specified tags
+    - entities: Content must be linked to ALL specified entity IDs
+    - entity_types: Content must have entities of specified types
+    - topics: Content must discuss topics matching the hierarchy pattern
+    """
     # Generate query embedding
     query_embedding = await embedding_service.embed_query(body.query)
 
@@ -92,12 +103,10 @@ async def vector_search(
     params = {"embedding": query_embedding, "limit": body.limit}
 
     if body.tags:
-        # Filter chunks where content has all specified tags
         where_clause += " AND content_id.tags CONTAINSALL $tags"
         params["tags"] = body.tags
 
     # Native SurrealDB vector search with cosine similarity
-    # Returns chunks with their similarity scores directly
     search_results = surreal_repo.db.query(
         f"""
         SELECT text, content_id,
@@ -114,7 +123,6 @@ async def vector_search(
     chunks: list[dict] = []
     if search_results and isinstance(search_results, list) and len(search_results) > 0:
         result_item = search_results[0]
-        # Handle both wrapped format {"result": [...]} and direct list format
         if isinstance(result_item, dict) and "result" in result_item:
             chunks = result_item["result"]
         elif isinstance(result_item, dict) and "score" in result_item:
@@ -131,6 +139,19 @@ async def vector_search(
             or score > best_per_content[content_id][0]
         ):
             best_per_content[content_id] = (score, text)
+
+    # Apply entity filters if specified
+    if body.entities or body.entity_types or body.topics:
+        filtered_content = await _filter_by_entities(
+            surreal_repo,
+            list(best_per_content.keys()),
+            body.entities,
+            body.entity_types,
+            body.topics,
+        )
+        best_per_content = {
+            k: v for k, v in best_per_content.items() if k in filtered_content
+        }
 
     # Get content metadata only for matched IDs
     id_to_meta: dict[str, dict] = {}
@@ -189,6 +210,111 @@ async def vector_search(
         results=results,
         total=len(results),
     )
+
+
+async def _filter_by_entities(
+    surreal_repo: SurrealDBRepository,
+    content_ids: list[str],
+    entity_ids: list[str] | None,
+    entity_types: list[str] | None,
+    topics: list[str] | None,
+) -> set[str]:
+    """Filter content IDs by entity constraints.
+
+    Args:
+        surreal_repo: Database repository
+        content_ids: Content IDs to filter
+        entity_ids: Must be linked to ALL these entities
+        entity_types: Must have entities of these types
+        topics: Must discuss topics matching these patterns
+
+    Returns:
+        Set of content IDs that match all constraints
+    """
+    if not content_ids:
+        return set()
+
+    matching = set(content_ids)
+
+    # Filter by specific entity IDs
+    if entity_ids:
+        entity_refs = [f"entity:{eid}" for eid in entity_ids]
+        for entity_ref in entity_refs:
+            result = surreal_repo.db.query(
+                """
+                SELECT content_id FROM content_entity
+                WHERE entity_id = $entity_id AND content_id IN $content_ids
+                """,
+                {
+                    "entity_id": entity_ref,
+                    "content_ids": [f"content:{cid}" for cid in matching],
+                },
+            )
+            raw_items = surreal_repo._parse_query_result(result)
+            matched_content = set()
+            for item in raw_items:
+                cid = item.get("content_id")
+                if hasattr(cid, "id"):
+                    cid = cid.id
+                else:
+                    cid = str(cid).split(":")[-1]
+                matched_content.add(cid)
+            matching &= matched_content
+
+    # Filter by entity types
+    if entity_types and matching:
+        result = surreal_repo.db.query(
+            """
+            SELECT content_id FROM content_entity
+            WHERE content_id IN $content_ids
+            AND entity_id.entity_type IN $entity_types
+            """,
+            {
+                "content_ids": [f"content:{cid}" for cid in matching],
+                "entity_types": entity_types,
+            },
+        )
+        raw_items = surreal_repo._parse_query_result(result)
+        matched_content = set()
+        for item in raw_items:
+            cid = item.get("content_id")
+            if hasattr(cid, "id"):
+                cid = cid.id
+            else:
+                cid = str(cid).split(":")[-1]
+            matched_content.add(cid)
+        matching &= matched_content
+
+    # Filter by topics (partial hierarchy match)
+    if topics and matching:
+        for topic_pattern in topics:
+            # Parse topic hierarchy pattern (e.g., "AI > LLMs")
+            hierarchy = [p.strip() for p in topic_pattern.split(">")]
+
+            result = surreal_repo.db.query(
+                """
+                SELECT content_id FROM content_entity
+                WHERE content_id IN $content_ids
+                AND entity_id.entity_type = 'topic'
+                AND entity_id.hierarchy CONTAINSALL $hierarchy
+                """,
+                {
+                    "content_ids": [f"content:{cid}" for cid in matching],
+                    "hierarchy": hierarchy,
+                },
+            )
+            raw_items = surreal_repo._parse_query_result(result)
+            matched_content = set()
+            for item in raw_items:
+                cid = item.get("content_id")
+                if hasattr(cid, "id"):
+                    cid = cid.id
+                else:
+                    cid = str(cid).split(":")[-1]
+                matched_content.add(cid)
+            matching &= matched_content
+
+    return matching
 
 
 @router.post("/agentic", response_model=AgenticSearchResponse)

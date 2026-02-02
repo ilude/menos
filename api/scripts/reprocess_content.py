@@ -7,9 +7,12 @@ This script reprocesses existing content to:
 - Populate the link table
 - Extract tags from YouTube video metadata.json
 - Update content tags in database
+- Extract entities (topics, repos, papers, tools) from content
 
 Run with: uv run python scripts/reprocess_content.py
 Use --dry-run to preview changes without applying them.
+Use --entities-only to only run entity extraction (skip tags/links).
+Use --skip-entities to skip entity extraction (only run tags/links).
 """
 
 import argparse
@@ -38,15 +41,22 @@ logger = logging.getLogger(__name__)
 class ContentReprocessor:
     """Reprocesses existing content to populate new PKM data structures."""
 
-    def __init__(self, surreal_repo: SurrealDBRepository, minio_storage: MinIOStorage):
+    def __init__(
+        self,
+        surreal_repo: SurrealDBRepository,
+        minio_storage: MinIOStorage,
+        entity_resolution_service=None,
+    ):
         """Initialize reprocessor with storage services.
 
         Args:
             surreal_repo: SurrealDB repository for metadata operations
             minio_storage: MinIO storage for file operations
+            entity_resolution_service: Optional entity resolution service
         """
         self.surreal_repo = surreal_repo
         self.minio_storage = minio_storage
+        self.entity_resolution = entity_resolution_service
         self.frontmatter_parser = FrontmatterParser()
         self.link_extractor = LinkExtractor()
 
@@ -58,22 +68,40 @@ class ContentReprocessor:
             "errors": 0,
             "tags_updated": 0,
             "links_created": 0,
+            "entities_created": 0,
+            "entity_edges_created": 0,
         }
 
-    async def reprocess_all_content(self, dry_run: bool = False) -> None:
+    async def reprocess_all_content(
+        self,
+        dry_run: bool = False,
+        entities_only: bool = False,
+        skip_entities: bool = False,
+    ) -> None:
         """Reprocess all content in the database.
 
         Args:
             dry_run: If True, preview changes without applying them
+            entities_only: If True, only run entity extraction
+            skip_entities: If True, skip entity extraction
         """
         start_time = datetime.now()
         logger.info("Starting content reprocessing...")
         if dry_run:
             logger.info("DRY RUN MODE - No changes will be applied")
+        if entities_only:
+            logger.info("ENTITIES ONLY MODE - Only running entity extraction")
+        if skip_entities:
+            logger.info("SKIP ENTITIES MODE - Skipping entity extraction")
+
+        # Refresh entity matcher cache if doing entity extraction
+        if self.entity_resolution and not skip_entities and not dry_run:
+            logger.info("Refreshing entity matcher cache...")
+            await self.entity_resolution.refresh_matcher_cache()
 
         # Fetch all content in batches
         offset = 0
-        limit = 50
+        limit = 20 if not skip_entities else 50  # Smaller batch for entity extraction
         batch_num = 1
 
         while True:
@@ -92,7 +120,12 @@ class ContentReprocessor:
                     continue
 
                 try:
-                    await self._reprocess_item(item, dry_run)
+                    await self._reprocess_item(
+                        item,
+                        dry_run=dry_run,
+                        entities_only=entities_only,
+                        skip_entities=skip_entities,
+                    )
                     self.stats["processed"] += 1
                 except Exception as e:
                     logger.error(f"Error processing content {item.id} ({item.title}): {e}")
@@ -115,12 +148,59 @@ class ContentReprocessor:
         logger.info(f"Processed: {self.stats['processed']}")
         logger.info(f"Skipped: {self.stats['skipped']}")
         logger.info(f"Errors: {self.stats['errors']}")
-        logger.info(f"Tags updated: {self.stats['tags_updated']}")
-        logger.info(f"Links created: {self.stats['links_created']}")
+        if not entities_only:
+            logger.info(f"Tags updated: {self.stats['tags_updated']}")
+            logger.info(f"Links created: {self.stats['links_created']}")
+        if not skip_entities:
+            logger.info(f"Entities created: {self.stats['entities_created']}")
+            logger.info(f"Entity edges created: {self.stats['entity_edges_created']}")
         logger.info("=" * 80)
 
-    async def _reprocess_item(self, item, dry_run: bool) -> None:
+    async def _reprocess_item(
+        self,
+        item,
+        dry_run: bool,
+        entities_only: bool = False,
+        skip_entities: bool = False,
+    ) -> None:
         """Reprocess a single content item.
+
+        Args:
+            item: ContentMetadata object
+            dry_run: If True, preview changes without applying them
+            entities_only: If True, only run entity extraction
+            skip_entities: If True, skip entity extraction
+        """
+        content_id = item.id
+        content_type = item.content_type
+
+        logger.info(f"Processing {content_type}: {content_id} - {item.title}")
+
+        # Check if entity extraction already done (skip if --entities-only and completed)
+        if entities_only:
+            extraction_status = getattr(item, "entity_extraction_status", None)
+            if extraction_status == "completed":
+                logger.info(f"  Entity extraction already completed, skipping")
+                self.stats["skipped"] += 1
+                return
+
+        # Original PKM reprocessing (tags, links)
+        if not entities_only:
+            if content_type == "youtube":
+                await self._reprocess_youtube(item, dry_run)
+            elif item.mime_type == "text/markdown" or (
+                item.file_path and item.file_path.endswith(".md")
+            ):
+                await self._reprocess_markdown(item, dry_run)
+            else:
+                logger.info(f"  Skipping non-markdown content: {item.mime_type}")
+
+        # Entity extraction
+        if not skip_entities and self.entity_resolution:
+            await self._reprocess_entities(item, dry_run)
+
+    async def _reprocess_entities(self, item, dry_run: bool) -> None:
+        """Extract and store entities for a content item.
 
         Args:
             item: ContentMetadata object
@@ -129,17 +209,122 @@ class ContentReprocessor:
         content_id = item.id
         content_type = item.content_type
 
-        logger.info(f"Processing {content_type}: {content_id} - {item.title}")
+        # Get content text
+        content_text = await self._get_content_text(item)
+        if not content_text:
+            logger.info(f"  No content text available for entity extraction")
+            return
+
+        # Get description URLs for YouTube content
+        description_urls = []
+        if content_type == "youtube":
+            description_urls = await self._get_youtube_description_urls(item)
+
+        logger.info(f"  Extracting entities from {len(content_text)} chars...")
+
+        if dry_run:
+            logger.info(f"  [DRY RUN] Would extract entities from content")
+            return
+
+        try:
+            # Mark as processing
+            await self.surreal_repo.update_content_extraction_status(
+                content_id, "processing"
+            )
+
+            # Run entity resolution pipeline
+            result = await self.entity_resolution.process_content(
+                content_id=content_id,
+                content_text=content_text,
+                content_type=content_type,
+                title=item.title or "Untitled",
+                description_urls=description_urls,
+            )
+
+            self.stats["entities_created"] += result.entities_created
+            self.stats["entity_edges_created"] += len(result.edges)
+
+            logger.info(
+                f"  Created {result.entities_created} entities, "
+                f"{len(result.edges)} edges"
+            )
+
+            if result.metrics:
+                logger.info(
+                    f"  Metrics: pre_detected={result.metrics.pre_detected_count}, "
+                    f"llm_extracted={result.metrics.llm_extracted_count}, "
+                    f"llm_skipped={result.metrics.llm_skipped}"
+                )
+
+        except Exception as e:
+            logger.error(f"  Entity extraction failed: {e}")
+            await self.surreal_repo.update_content_extraction_status(
+                content_id, "failed"
+            )
+            raise
+
+    async def _get_content_text(self, item) -> str | None:
+        """Get the text content for entity extraction.
+
+        Args:
+            item: ContentMetadata object
+
+        Returns:
+            Content text or None
+        """
+        content_type = item.content_type
 
         if content_type == "youtube":
-            await self._reprocess_youtube(item, dry_run)
-        elif item.mime_type == "text/markdown" or (
-            item.file_path and item.file_path.endswith(".md")
-        ):
-            await self._reprocess_markdown(item, dry_run)
-        else:
-            logger.info(f"  Skipping non-markdown content: {item.mime_type}")
-            self.stats["skipped"] += 1
+            # Get transcript from MinIO
+            video_id = item.metadata.get("video_id") if item.metadata else None
+            if not video_id:
+                return None
+
+            transcript_path = f"youtube/{video_id}/transcript.txt"
+            try:
+                transcript_bytes = await self.minio_storage.download(transcript_path)
+                return transcript_bytes.decode("utf-8")
+            except Exception:
+                return None
+
+        elif item.file_path and item.file_path.endswith(".md"):
+            try:
+                content_bytes = await self.minio_storage.download(item.file_path)
+                content_text = content_bytes.decode("utf-8")
+                # Strip frontmatter
+                body, _ = self.frontmatter_parser.parse(content_text)
+                return body
+            except Exception:
+                return None
+
+        return None
+
+    async def _get_youtube_description_urls(self, item) -> list[str]:
+        """Extract URLs from YouTube video description.
+
+        Args:
+            item: ContentMetadata for YouTube video
+
+        Returns:
+            List of URLs from description
+        """
+        video_id = item.metadata.get("video_id") if item.metadata else None
+        if not video_id:
+            return []
+
+        metadata_path = f"youtube/{video_id}/metadata.json"
+        try:
+            metadata_bytes = await self.minio_storage.download(metadata_path)
+            metadata_dict = json.loads(metadata_bytes.decode("utf-8"))
+            description = metadata_dict.get("description", "")
+
+            # Simple URL extraction
+            import re
+            url_pattern = r'https?://[^\s<>"\'\\]+'
+            urls = re.findall(url_pattern, description)
+            return urls
+        except Exception:
+            return []
 
     async def _reprocess_youtube(self, item, dry_run: bool) -> None:
         """Reprocess YouTube video to extract tags from metadata.json.
@@ -297,6 +482,90 @@ class ContentReprocessor:
             raise
 
 
+def _create_entity_resolution_service(surreal_repo: SurrealDBRepository):
+    """Create entity resolution service with all dependencies.
+
+    Args:
+        surreal_repo: SurrealDB repository
+
+    Returns:
+        EntityResolutionService or None if dependencies unavailable
+    """
+    if not settings.entity_extraction_enabled:
+        logger.info("Entity extraction disabled in settings")
+        return None
+
+    try:
+        from menos.services.entity_extraction import EntityExtractionService
+        from menos.services.entity_resolution import EntityResolutionService
+        from menos.services.keyword_matcher import EntityKeywordMatcher
+        from menos.services.llm import OllamaLLMProvider
+
+        # Create LLM provider
+        llm_provider = OllamaLLMProvider(
+            base_url=settings.ollama_url,
+            model=settings.entity_extraction_model,
+        )
+
+        # Create extraction service
+        extraction_service = EntityExtractionService(
+            llm_provider=llm_provider,
+            settings=settings,
+        )
+
+        # Create keyword matcher
+        keyword_matcher = EntityKeywordMatcher()
+
+        # Try to import optional fetchers
+        url_detector = None
+        sponsored_filter = None
+        github_fetcher = None
+        arxiv_fetcher = None
+
+        try:
+            from menos.services.url_detector import URLDetector
+            url_detector = URLDetector()
+        except ImportError:
+            logger.warning("URL detector not available")
+
+        try:
+            from menos.services.sponsored_filter import SponsoredFilter
+            sponsored_filter = SponsoredFilter()
+        except ImportError:
+            logger.warning("Sponsored filter not available")
+
+        try:
+            from menos.services.entity_fetchers.github import GitHubFetcher
+            github_fetcher = GitHubFetcher(
+                proxy_username=settings.webshare_proxy_username,
+                proxy_password=settings.webshare_proxy_password,
+            )
+        except ImportError:
+            logger.warning("GitHub fetcher not available")
+
+        try:
+            from menos.services.entity_fetchers.arxiv import ArxivFetcher
+            arxiv_fetcher = ArxivFetcher()
+        except ImportError:
+            logger.warning("ArXiv fetcher not available")
+
+        # Create resolution service
+        return EntityResolutionService(
+            repository=surreal_repo,
+            extraction_service=extraction_service,
+            keyword_matcher=keyword_matcher,
+            settings=settings,
+            url_detector=url_detector,
+            sponsored_filter=sponsored_filter,
+            github_fetcher=github_fetcher,
+            arxiv_fetcher=arxiv_fetcher,
+        )
+
+    except ImportError as e:
+        logger.warning(f"Entity extraction services not available: {e}")
+        return None
+
+
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -307,7 +576,21 @@ async def main():
         action="store_true",
         help="Preview changes without applying them",
     )
+    parser.add_argument(
+        "--entities-only",
+        action="store_true",
+        help="Only run entity extraction (skip tags/links processing)",
+    )
+    parser.add_argument(
+        "--skip-entities",
+        action="store_true",
+        help="Skip entity extraction (only run tags/links processing)",
+    )
     args = parser.parse_args()
+
+    if args.entities_only and args.skip_entities:
+        logger.error("Cannot use both --entities-only and --skip-entities")
+        return
 
     # Initialize MinIO client
     logger.info(f"Connecting to MinIO at {settings.minio_endpoint}")
@@ -338,9 +621,25 @@ async def main():
         logger.error("Please ensure SurrealDB is running and accessible")
         return
 
+    # Create entity resolution service (if not skipping entities)
+    entity_resolution = None
+    if not args.skip_entities:
+        entity_resolution = _create_entity_resolution_service(surreal_repo)
+        if args.entities_only and not entity_resolution:
+            logger.error("Entity extraction requested but service not available")
+            return
+
     # Run reprocessing
-    reprocessor = ContentReprocessor(surreal_repo, minio_storage)
-    await reprocessor.reprocess_all_content(dry_run=args.dry_run)
+    reprocessor = ContentReprocessor(
+        surreal_repo,
+        minio_storage,
+        entity_resolution_service=entity_resolution,
+    )
+    await reprocessor.reprocess_all_content(
+        dry_run=args.dry_run,
+        entities_only=args.entities_only,
+        skip_entities=args.skip_entities,
+    )
 
 
 if __name__ == "__main__":
