@@ -1,23 +1,20 @@
 """Unit tests for content reprocessing script logic."""
 
 import json
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from menos.models import ContentMetadata, LinkModel
-from menos.services.frontmatter import FrontmatterParser
-from menos.services.linking import ExtractedLink, LinkExtractor
+from menos.models import ContentMetadata
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 
 # Import the ContentReprocessor class by adding scripts to path
-import sys
-from pathlib import Path
-
 scripts_path = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(scripts_path))
 
-from reprocess_content import ContentReprocessor
+from reprocess_content import ContentReprocessor  # noqa: E402
 
 
 class TestContentReprocessor:
@@ -303,13 +300,14 @@ Links to [[Note]]
         mock_surreal_repo.list_content.side_effect = [
             (batch1, 51),  # First call: 50 items, total 51
             (batch2, 51),  # Second call: 1 item, total 51
+            ([], 51),  # Third call: empty signals end of loop
         ]
 
         # Execute
         await reprocessor.reprocess_all_content(dry_run=True)
 
         # Verify
-        assert mock_surreal_repo.list_content.call_count == 2
+        assert mock_surreal_repo.list_content.call_count == 3
         assert reprocessor.stats["total"] == 51
 
     async def test_reprocess_handles_errors_gracefully(
