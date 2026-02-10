@@ -84,11 +84,8 @@ def mock_surreal():
 
 @pytest.fixture
 def mock_settings():
-    """Mock settings with Ollama config."""
-    s = MagicMock()
-    s.ollama_url = "http://localhost:11434"
-    s.ollama_summary_model = "llama3"
-    return s
+    """Mock settings."""
+    return MagicMock()
 
 
 @pytest.fixture
@@ -119,9 +116,8 @@ def patched_refetch(
 
     with (
         patch(f"{MODULE}.get_storage_context", mock_storage_context),
-        patch(f"{MODULE}.settings", mock_settings),
         patch(f"{MODULE}.YouTubeMetadataService", return_value=mock_metadata_service),
-        patch(f"{MODULE}.LLMService", return_value=mock_llm_service),
+        patch(f"{MODULE}.build_openrouter_chain", return_value=mock_llm_service),
     ):
         yield {
             "minio": mock_minio,

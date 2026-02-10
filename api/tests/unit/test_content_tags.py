@@ -11,11 +11,21 @@ from menos.routers.content import create_content, list_tags
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 
 
+@pytest.fixture
+def mock_classification_svc():
+    """Mock classification service for content creation tests."""
+    svc = MagicMock()
+    svc.classify_content = AsyncMock(return_value=None)
+    svc.settings = MagicMock()
+    svc.settings.classification_min_content_length = 500
+    return svc
+
+
 class TestContentTagsParameter:
     """Tests for content tags parameter in POST /api/v1/content endpoint."""
 
     @pytest.mark.asyncio
-    async def test_create_content_with_tags(self):
+    async def test_create_content_with_tags(self, mock_classification_svc):
         """Test creating content with tags stored in metadata."""
         mock_minio = MagicMock(spec=MinIOStorage)
         mock_minio.upload = AsyncMock(return_value=100)
@@ -52,6 +62,7 @@ class TestContentTagsParameter:
             tags=["important", "review", "urgent"],
             minio_storage=mock_minio,
             surreal_repo=mock_repo,
+            classification_service=mock_classification_svc,
         )
 
         # Verify the result
@@ -69,7 +80,7 @@ class TestContentTagsParameter:
         assert metadata.tags == ["important", "review", "urgent"]
 
     @pytest.mark.asyncio
-    async def test_create_content_without_tags(self):
+    async def test_create_content_without_tags(self, mock_classification_svc):
         """Test creating content without tags defaults to empty list."""
         mock_minio = MagicMock(spec=MinIOStorage)
         mock_minio.upload = AsyncMock(return_value=100)
@@ -106,6 +117,7 @@ class TestContentTagsParameter:
             tags=None,
             minio_storage=mock_minio,
             surreal_repo=mock_repo,
+            classification_service=mock_classification_svc,
         )
 
         # Verify the result
@@ -119,7 +131,7 @@ class TestContentTagsParameter:
         assert metadata.tags == []
 
     @pytest.mark.asyncio
-    async def test_create_content_with_empty_tags_list(self):
+    async def test_create_content_with_empty_tags_list(self, mock_classification_svc):
         """Test creating content with empty tags list."""
         mock_minio = MagicMock(spec=MinIOStorage)
         mock_minio.upload = AsyncMock(return_value=100)
@@ -156,6 +168,7 @@ class TestContentTagsParameter:
             tags=[],
             minio_storage=mock_minio,
             surreal_repo=mock_repo,
+            classification_service=mock_classification_svc,
         )
 
         # Verify the result

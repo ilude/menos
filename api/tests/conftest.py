@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from menos.client.signer import RequestSigner
 from menos.services.di import (
+    get_classification_service,
     get_minio_storage,
     get_surreal_repo,
 )
@@ -139,7 +140,21 @@ def mock_llm_service():
 
 
 @pytest.fixture
-def app_with_keys(keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_service, mock_minio_storage, mock_youtube_service, mock_metadata_service, mock_llm_service):
+def mock_classification_service():
+    """Mock classification service."""
+    service = MagicMock()
+    service.classify_content = AsyncMock(return_value=None)
+    service.settings = MagicMock()
+    service.settings.classification_min_content_length = 500
+    return service
+
+
+@pytest.fixture
+def app_with_keys(
+    keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_service,
+    mock_minio_storage, mock_youtube_service, mock_metadata_service,
+    mock_llm_service, mock_classification_service,
+):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
 
@@ -161,6 +176,7 @@ def app_with_keys(keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_servi
     app.dependency_overrides[get_youtube_service] = lambda: mock_youtube_service
     app.dependency_overrides[get_youtube_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_llm_service] = lambda: mock_llm_service
+    app.dependency_overrides[get_classification_service] = lambda: mock_classification_service
 
     yield app
 
