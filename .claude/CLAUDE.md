@@ -1,31 +1,13 @@
 # Project-specific Claude Instructions
 
-## Deployment
+## Rules
 
-### Docker Desktop Required
-
-**If Docker Desktop is not running and a task requires it (deployment, Ansible, container operations):**
-
-1. STOP immediately
-2. Ask the user to start Docker Desktop
-3. Do NOT attempt workarounds (direct file operations, rm -rf, manual scp, etc.)
-
-Workarounds to deployment tooling can lead to dangerous operations on production servers. Always use the proper deployment pipeline.
-
-### Deployment Commands
-
-Use Ansible for deployment:
-```bash
-cd infra/ansible
-docker compose run --rm ansible ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml
-```
-
-### Smoke Tests
-
-After deployment, run smoke tests:
-```bash
-cd api
-uv run pytest tests/smoke/ -m smoke -v
-# Or use the CLI runner
-uv run python scripts/smoke_test.py --url https://api.menos.example.com -v
-```
+Project context is in `.claude/rules/`:
+- `architecture.md` — Project overview, directory tree, design patterns, code style
+- `api-reference.md` — Endpoints, config env vars (auto-loaded for `api/` files)
+- `schema.md` — SurrealDB schema (auto-loaded for `api/` files)
+- `dev-commands.md` — Dev workflow, testing, linting, scripts
+- `migrations.md` — Migration system (auto-loaded for migration files)
+- `deployment.md` — Ansible deploy, version gate, Docker Desktop safety rule
+- `troubleshooting.md` — Server access, logs, common issues
+- `gotchas.md` — Cross-platform issues, container gotchas
