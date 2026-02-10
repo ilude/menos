@@ -145,7 +145,7 @@ def main():
                         f"    OK: {data.get('video_id')} - {data.get('chunks_created')} chunks"
                     )
                 else:
-                    print(f"    ERROR {response.status_code}: {response.text[:200]}")
+                    print(f"    ERROR {response.status_code}: {response.text}")
             except Exception as e:
                 print(f"    EXCEPTION: {e}")
 
