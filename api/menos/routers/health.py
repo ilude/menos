@@ -1,5 +1,7 @@
 """Health and status endpoints."""
 
+import os
+
 import httpx
 from fastapi import APIRouter
 from minio import Minio
@@ -13,7 +15,11 @@ router = APIRouter(tags=["health"])
 @router.get("/health")
 async def health():
     """Basic health check - always returns ok if service is running."""
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "git_sha": os.environ.get("GIT_SHA", "unknown"),
+        "build_date": os.environ.get("BUILD_DATE", "unknown"),
+    }
 
 
 async def check_surrealdb() -> str:

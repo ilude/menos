@@ -10,7 +10,10 @@ class TestHealthEndpoints:
         response = client.get("/health")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        data = response.json()
+        assert data["status"] == "ok"
+        assert "git_sha" in data
+        assert "build_date" in data
 
     def test_ready_returns_status(self, client):
         """Ready endpoint should return service status."""

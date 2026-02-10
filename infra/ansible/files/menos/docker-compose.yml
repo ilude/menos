@@ -42,7 +42,11 @@ services:
     restart: unless-stopped
 
   menos-api:
-    build: ./api
+    build:
+      context: ./api
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
     container_name: menos-api
     ports:
       - "8000:8000"

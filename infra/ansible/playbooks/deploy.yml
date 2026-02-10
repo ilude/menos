@@ -59,6 +59,64 @@
         group: "65532"
         recurse: true
 
+    # --- Pre-flight checks ---
+    - name: Mark git repo as safe directory
+      ansible.builtin.command:
+        cmd: git config --global --add safe.directory /project
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Get local git SHA
+      ansible.builtin.command:
+        cmd: git rev-parse HEAD
+        chdir: /project
+      delegate_to: localhost
+      register: local_git_sha
+      changed_when: false
+
+    - name: Get local git branch
+      ansible.builtin.command:
+        cmd: git rev-parse --abbrev-ref HEAD
+        chdir: /project
+      delegate_to: localhost
+      register: local_git_branch
+      changed_when: false
+
+    - name: Check for uncommitted changes
+      ansible.builtin.command:
+        cmd: git status --porcelain
+        chdir: /project
+      delegate_to: localhost
+      register: git_status
+      changed_when: false
+      failed_when: git_status.stdout != ""
+
+    - name: Display deploy info
+      ansible.builtin.debug:
+        msg: "Deploying {{ local_git_sha.stdout[:8] }} ({{ local_git_branch.stdout }}) to {{ ansible_host }}"
+
+    # --- Version gate ---
+    - name: Check if API is currently running
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8000/health"
+        return_content: true
+      register: server_health
+      failed_when: false
+      changed_when: false
+
+    - name: Check ancestry when server has a known SHA
+      ansible.builtin.command:
+        cmd: "git merge-base --is-ancestor {{ server_health.json.git_sha }} {{ local_git_sha.stdout }}"
+        chdir: /project
+      delegate_to: localhost
+      register: ancestry_check
+      changed_when: false
+      failed_when: ancestry_check.rc != 0
+      when:
+        - server_health.status == 200
+        - server_health.json.git_sha is defined
+        - server_health.json.git_sha != "unknown"
+
     - name: Sync compose files
       ansible.builtin.copy:
         src: "../files/menos/"
@@ -105,7 +163,7 @@
 
     - name: Build API image
       ansible.builtin.command:
-        cmd: docker compose build menos-api
+        cmd: "docker compose build --build-arg GIT_SHA={{ local_git_sha.stdout }} --build-arg BUILD_DATE={{ ansible_date_time.iso8601 }} menos-api"
         chdir: "{{ deploy_path }}"
       changed_when: true
 
@@ -129,6 +187,24 @@
     - name: Display status
       ansible.builtin.debug:
         var: compose_status.stdout_lines
+
+    # --- Post-deploy verification ---
+    - name: Verify deployed version
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8000/health"
+        return_content: true
+      register: post_deploy_health
+      retries: 5
+      delay: 3
+      until: post_deploy_health.status == 200
+      changed_when: false
+
+    - name: Confirm SHA matches
+      ansible.builtin.assert:
+        that:
+          - post_deploy_health.json.git_sha == local_git_sha.stdout
+        fail_msg: "Deploy verification failed! Expected {{ local_git_sha.stdout }}, got {{ post_deploy_health.json.git_sha }}"
+        success_msg: "Deploy verified: {{ post_deploy_health.json.git_sha[:8] }} running on {{ ansible_host }}"
 
     - name: Pull Ollama models
       ansible.builtin.command:
