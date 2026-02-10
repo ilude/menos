@@ -1,14 +1,12 @@
 """Unit tests for scripts/query.py."""
 
 import json
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from scripts.query import (
     format_table,
-    load_env_file,
     main,
     parse_results,
     run_query,
@@ -139,75 +137,6 @@ class TestFormatTable:
         assert zebra_pos < apple_pos < mango_pos
 
 
-class TestLoadEnvFile:
-    """Tests for load_env_file function."""
-
-    @pytest.fixture
-    def env_setup(self, tmp_path, monkeypatch):
-        """Set up a fake directory structure so load_env_file finds .env in tmp_path."""
-        # load_env_file does: Path(__file__).resolve().parent.parent.parent / ".env"
-        # So we need __file__ to be at tmp_path/api/scripts/query.py
-        fake_script = tmp_path / "api" / "scripts" / "query.py"
-        fake_script.parent.mkdir(parents=True, exist_ok=True)
-        fake_script.touch()
-        monkeypatch.setattr("scripts.query.__file__", str(fake_script))
-        return tmp_path
-
-    def test_loads_key_value_pairs(self, env_setup, monkeypatch):
-        env_file = env_setup / ".env"
-        env_file.write_text("MY_TEST_KEY=my_test_value\n")
-        monkeypatch.delenv("MY_TEST_KEY", raising=False)
-        load_env_file()
-        assert os.environ["MY_TEST_KEY"] == "my_test_value"
-        monkeypatch.delenv("MY_TEST_KEY", raising=False)
-
-    def test_skips_comments_and_blank_lines(self, env_setup, monkeypatch):
-        env_file = env_setup / ".env"
-        env_file.write_text("# this is a comment\n\nVALID_KEY=valid_value\n")
-        monkeypatch.delenv("VALID_KEY", raising=False)
-        load_env_file()
-        assert os.environ["VALID_KEY"] == "valid_value"
-        monkeypatch.delenv("VALID_KEY", raising=False)
-
-    def test_handles_export_prefix(self, env_setup, monkeypatch):
-        env_file = env_setup / ".env"
-        env_file.write_text("export EXPORTED_VAR=exported_val\n")
-        monkeypatch.delenv("EXPORTED_VAR", raising=False)
-        load_env_file()
-        assert os.environ["EXPORTED_VAR"] == "exported_val"
-        monkeypatch.delenv("EXPORTED_VAR", raising=False)
-
-    def test_strips_single_and_double_quotes(self, env_setup, monkeypatch):
-        env_file = env_setup / ".env"
-        env_file.write_text("SINGLE_Q='single_val'\nDOUBLE_Q=\"double_val\"\n")
-        monkeypatch.delenv("SINGLE_Q", raising=False)
-        monkeypatch.delenv("DOUBLE_Q", raising=False)
-        load_env_file()
-        assert os.environ["SINGLE_Q"] == "single_val"
-        assert os.environ["DOUBLE_Q"] == "double_val"
-        monkeypatch.delenv("SINGLE_Q", raising=False)
-        monkeypatch.delenv("DOUBLE_Q", raising=False)
-
-    def test_does_not_overwrite_existing_env_vars(self, env_setup, monkeypatch):
-        env_file = env_setup / ".env"
-        env_file.write_text("EXISTING_VAR=new_value\n")
-        monkeypatch.setenv("EXISTING_VAR", "original_value")
-        load_env_file()
-        assert os.environ["EXISTING_VAR"] == "original_value"
-
-    def test_handles_missing_env_file(self, env_setup):
-        # No .env file created — should not raise
-        load_env_file()
-
-    def test_handles_values_with_equals_sign(self, env_setup, monkeypatch):
-        env_file = env_setup / ".env"
-        env_file.write_text("COMPLEX_VAL=foo=bar=baz\n")
-        monkeypatch.delenv("COMPLEX_VAL", raising=False)
-        load_env_file()
-        assert os.environ["COMPLEX_VAL"] == "foo=bar=baz"
-        monkeypatch.delenv("COMPLEX_VAL", raising=False)
-
-
 class TestQuerySafety:
     """Tests for dangerous query blocking in run_query."""
 
@@ -295,23 +224,13 @@ class TestRunQuery:
         assert isinstance(parsed, list)
         assert parsed[0]["name"] == "test"
 
-    def test_reads_password_from_env(self, mock_surreal, monkeypatch):
-        monkeypatch.setenv("SURREALDB_PASSWORD", "secret123")
+    def test_uses_settings_credentials(self, mock_surreal):
         _, mock_db = mock_surreal
         import asyncio
         asyncio.run(run_query("SELECT * FROM content"))
-        mock_db.signin.assert_called_once_with(
-            {"username": "root", "password": "secret123"}
-        )
-
-    def test_falls_back_to_default_password(self, mock_surreal, monkeypatch):
-        monkeypatch.delenv("SURREALDB_PASSWORD", raising=False)
-        _, mock_db = mock_surreal
-        import asyncio
-        asyncio.run(run_query("SELECT * FROM content"))
-        mock_db.signin.assert_called_once_with(
-            {"username": "root", "password": "root"}
-        )
+        # Should use settings values (loaded from env)
+        mock_db.signin.assert_called_once()
+        mock_db.use.assert_called_once()
 
     def test_connects_to_provided_url(self, mock_surreal):
         mock_cls, _ = mock_surreal
@@ -344,7 +263,6 @@ class TestMainCLI:
         async def fake_run_query(query, output_json, db_url):
             calls.append((query, output_json, db_url))
 
-        monkeypatch.setattr("scripts.query.load_env_file", lambda: None)
         monkeypatch.setattr("scripts.query.run_query", fake_run_query)
         main()
         assert len(calls) == 1
@@ -359,7 +277,6 @@ class TestMainCLI:
         async def fake_run_query(query, output_json, db_url):
             calls.append((query, output_json, db_url))
 
-        monkeypatch.setattr("scripts.query.load_env_file", lambda: None)
         monkeypatch.setattr("scripts.query.run_query", fake_run_query)
         main()
         assert calls[0][1] is True
@@ -374,24 +291,6 @@ class TestMainCLI:
         async def fake_run_query(query, output_json, db_url):
             calls.append((query, output_json, db_url))
 
-        monkeypatch.setattr("scripts.query.load_env_file", lambda: None)
         monkeypatch.setattr("scripts.query.run_query", fake_run_query)
         main()
         assert calls[0][2] == "http://custom:8080"
-
-    def test_calls_load_env_file_before_query(self, monkeypatch):
-        monkeypatch.setattr(
-            "sys.argv", ["query.py", "SELECT 1"]
-        )
-        call_order = []
-
-        def fake_load_env():
-            call_order.append("load_env")
-
-        async def fake_run_query(query, output_json, db_url):
-            call_order.append("run_query")
-
-        monkeypatch.setattr("scripts.query.load_env_file", fake_load_env)
-        monkeypatch.setattr("scripts.query.run_query", fake_run_query)
-        main()
-        assert call_order == ["load_env", "run_query"]

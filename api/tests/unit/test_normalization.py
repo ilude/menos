@@ -1,6 +1,5 @@
 """Unit tests for normalization utilities."""
 
-import pytest
 
 from menos.services.normalization import (
     count_mentions,

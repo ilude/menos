@@ -14,7 +14,12 @@ class TestEntityExtractionService:
     def mock_llm_provider(self):
         """Create mock LLM provider."""
         provider = MagicMock()
-        provider.generate = AsyncMock(return_value='{"topics": [], "pre_detected_validations": [], "additional_entities": []}')
+        provider.generate = AsyncMock(
+            return_value=(
+                '{"topics": [], "pre_detected_validations": [], '
+                '"additional_entities": []}'
+            )
+        )
         return provider
 
     @pytest.fixture
@@ -156,7 +161,9 @@ class TestEntityExtractionService:
         assert result.pre_detected_validations[0].confirmed is True
 
     @pytest.mark.asyncio
-    async def test_extract_entities_parses_additional(self, extraction_service, mock_llm_provider):
+    async def test_extract_entities_parses_additional(
+        self, extraction_service, mock_llm_provider
+    ):
         """Test that additional entities are parsed."""
         mock_llm_provider.generate = AsyncMock(
             return_value="""
@@ -164,7 +171,8 @@ class TestEntityExtractionService:
                 "topics": [],
                 "pre_detected_validations": [],
                 "additional_entities": [
-                    {"type": "repo", "name": "FAISS", "confidence": "medium", "edge_type": "mentions"}
+                    {"type": "repo", "name": "FAISS", "confidence": "medium",
+                     "edge_type": "mentions"}
                 ]
             }
             """
@@ -182,7 +190,9 @@ class TestEntityExtractionService:
         assert result.additional_entities[0].edge_type == EdgeType.MENTIONS
 
     @pytest.mark.asyncio
-    async def test_extract_entities_handles_markdown_json(self, extraction_service, mock_llm_provider):
+    async def test_extract_entities_handles_markdown_json(
+        self, extraction_service, mock_llm_provider
+    ):
         """Test that JSON in markdown code blocks is parsed."""
         mock_llm_provider.generate = AsyncMock(
             return_value="""
@@ -208,7 +218,9 @@ class TestEntityExtractionService:
         assert result.topics[0].name == "Python"
 
     @pytest.mark.asyncio
-    async def test_extract_entities_respects_max_topics(self, extraction_service, mock_llm_provider, mock_settings):
+    async def test_extract_entities_respects_max_topics(
+        self, extraction_service, mock_llm_provider, mock_settings
+    ):
         """Test that max topics limit is respected."""
         mock_settings.entity_max_topics_per_content = 2
 
@@ -236,7 +248,9 @@ class TestEntityExtractionService:
         assert len(result.topics) == 2
 
     @pytest.mark.asyncio
-    async def test_extract_entities_filters_low_confidence(self, extraction_service, mock_llm_provider, mock_settings):
+    async def test_extract_entities_filters_low_confidence(
+        self, extraction_service, mock_llm_provider, mock_settings
+    ):
         """Test that low confidence topics are filtered."""
         mock_settings.entity_min_confidence = 0.6
 
@@ -279,7 +293,9 @@ class TestEntityExtractionService:
         assert metrics.llm_skipped is False
 
     @pytest.mark.asyncio
-    async def test_extract_entities_handles_invalid_json(self, extraction_service, mock_llm_provider):
+    async def test_extract_entities_handles_invalid_json(
+        self, extraction_service, mock_llm_provider,
+    ):
         """Test graceful handling of invalid JSON response."""
         mock_llm_provider.generate = AsyncMock(return_value="This is not JSON")
 

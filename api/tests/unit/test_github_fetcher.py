@@ -1,6 +1,6 @@
 """Unit tests for GitHub fetcher."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -56,7 +56,7 @@ class TestGitHubFetcher:
         assert result.language == "Python"
         assert result.topics == ["python", "programming", "cpython"]
         assert isinstance(result.fetched_at, datetime)
-        assert result.fetched_at.tzinfo == timezone.utc
+        assert result.fetched_at.tzinfo == UTC
 
     async def test_fetch_repo_not_found(self, fetcher: GitHubFetcher, httpx_mock: HTTPXMock):
         """Test repository not found returns None."""
@@ -246,7 +246,7 @@ class TestRepoMetadata:
 
     def test_repo_metadata_creation(self):
         """Test creating RepoMetadata instance."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         metadata = RepoMetadata(
             url="https://github.com/python/cpython",
             owner="python",
@@ -269,7 +269,7 @@ class TestRepoMetadata:
 
     def test_repo_metadata_with_none_values(self):
         """Test RepoMetadata with None values for optional fields."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         metadata = RepoMetadata(
             url="https://github.com/test/repo",
             owner="test",

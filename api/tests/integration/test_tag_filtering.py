@@ -9,7 +9,9 @@ from menos.services.storage import SurrealDBRepository
 class TestSearchTagFiltering:
     """Tests for tag filtering in POST /api/v1/search endpoint."""
 
-    def test_vector_search_with_tags(self, authed_client, mock_surreal_repo, mock_embedding_service):
+    def test_vector_search_with_tags(
+        self, authed_client, mock_surreal_repo, mock_embedding_service
+    ):
         """Should filter search results by tags."""
         # Mock embedding service
         mock_embedding_service.embed = AsyncMock(return_value=[0.1] * 1024)
@@ -28,7 +30,9 @@ class TestSearchTagFiltering:
         assert data["query"] == "test query"
         assert "results" in data
 
-    def test_vector_search_without_tags(self, authed_client, mock_surreal_repo, mock_embedding_service):
+    def test_vector_search_without_tags(
+        self, authed_client, mock_surreal_repo, mock_embedding_service
+    ):
         """Should work without tag filtering."""
         # Mock embedding service
         mock_embedding_service.embed = AsyncMock(return_value=[0.1] * 1024)
@@ -46,7 +50,9 @@ class TestSearchTagFiltering:
         data = response.json()
         assert data["query"] == "test query"
 
-    def test_vector_search_with_empty_tags(self, authed_client, mock_surreal_repo, mock_embedding_service):
+    def test_vector_search_with_empty_tags(
+        self, authed_client, mock_surreal_repo, mock_embedding_service
+    ):
         """Should handle empty tags list."""
         # Mock embedding service
         mock_embedding_service.embed = AsyncMock(return_value=[0.1] * 1024)

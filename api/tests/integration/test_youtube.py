@@ -3,8 +3,6 @@
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from menos.models import ContentMetadata
 
 
@@ -374,7 +372,11 @@ class TestYouTubeChannelsEndpoint:
 class TestYouTubeTags:
     """Tests for YouTube tags storage in database."""
 
-    def test_ingest_video_stores_youtube_tags(self, authed_client, mock_surreal_repo, mock_youtube_service, mock_metadata_service, mock_minio_storage, mock_embedding_service, mock_llm_service):
+    def test_ingest_video_stores_youtube_tags(
+        self, authed_client, mock_surreal_repo, mock_youtube_service,
+        mock_metadata_service, mock_minio_storage,
+        mock_embedding_service, mock_llm_service,
+    ):
         """Test that YouTube video tags are stored in ContentMetadata.tags during ingest."""
         from menos.services.youtube_metadata import YouTubeMetadata
 
@@ -447,7 +449,11 @@ class TestYouTubeTags:
         metadata_arg = call_args[0][0]
         assert metadata_arg.tags == ["python", "tutorial", "beginner"]
 
-    def test_ingest_video_stores_empty_tags_when_no_metadata(self, authed_client, mock_surreal_repo, mock_youtube_service, mock_metadata_service, mock_minio_storage, mock_embedding_service, mock_llm_service):
+    def test_ingest_video_stores_empty_tags_when_no_metadata(
+        self, authed_client, mock_surreal_repo, mock_youtube_service,
+        mock_metadata_service, mock_minio_storage,
+        mock_embedding_service, mock_llm_service,
+    ):
         """Test that empty tags list is stored when YouTube metadata cannot be fetched."""
         # Mock transcript response
         mock_transcript = MagicMock()
@@ -496,7 +502,10 @@ class TestYouTubeTags:
         metadata_arg = call_args[0][0]
         assert metadata_arg.tags == []
 
-    def test_upload_transcript_stores_empty_tags(self, authed_client, mock_surreal_repo, mock_minio_storage, mock_embedding_service):
+    def test_upload_transcript_stores_empty_tags(
+        self, authed_client, mock_surreal_repo,
+        mock_minio_storage, mock_embedding_service,
+    ):
         """Test that upload_transcript stores empty tags list."""
         # Mock storage
         mock_minio_storage.upload = AsyncMock(return_value=1000)

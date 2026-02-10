@@ -1,6 +1,5 @@
 """Tests for frontmatter parsing service."""
 
-import pytest
 
 from menos.services.frontmatter import FrontmatterParser
 

@@ -1,13 +1,12 @@
 """Unit tests for ArXiv fetcher service."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from menos.services.entity_fetchers.arxiv import ArxivFetcher, PaperMetadata
-
 
 # Sample XML response from arXiv API
 MOCK_ARXIV_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -28,7 +27,12 @@ MOCK_ARXIV_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
       <name>Noam Shazeer</name>
     </author>
     <link href="http://arxiv.org/abs/2301.12345v1" rel="alternate" type="text/html"/>
-    <link title="pdf" href="http://arxiv.org/pdf/2301.12345v1" rel="related" type="application/pdf"/>
+    <link
+      title="pdf"
+      href="http://arxiv.org/pdf/2301.12345v1"
+      rel="related"
+      type="application/pdf"
+    />
     <link title="doi" href="http://dx.doi.org/10.1234/example.doi" rel="related"/>
   </entry>
 </feed>"""
@@ -131,7 +135,7 @@ class TestArxivFetcher:
         assert metadata.title == "Attention Is All You Need"
         assert "sequence transduction models" in metadata.abstract
         assert metadata.authors == ["Ashish Vaswani", "Noam Shazeer"]
-        assert metadata.published_at == datetime(2023, 1, 29, 10, 30, 45, tzinfo=timezone.utc)
+        assert metadata.published_at == datetime(2023, 1, 29, 10, 30, 45, tzinfo=UTC)
         assert metadata.doi == "10.1234/example.doi"
         assert metadata.url == "http://arxiv.org/abs/2301.12345v1"
         assert isinstance(metadata.fetched_at, datetime)
@@ -156,7 +160,7 @@ class TestArxivFetcher:
         assert metadata.arxiv_id == "cs/0703110"
         assert metadata.title == "Old Paper Without DOI"
         assert metadata.doi is None
-        assert metadata.published_at == datetime(2007, 3, 22, 15, 20, 30, tzinfo=timezone.utc)
+        assert metadata.published_at == datetime(2007, 3, 22, 15, 20, 30, tzinfo=UTC)
 
     @pytest.mark.asyncio
     async def test_fetch_paper_not_found(self):

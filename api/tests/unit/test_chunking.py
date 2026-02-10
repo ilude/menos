@@ -92,7 +92,7 @@ class TestChunkingService:
 
         if len(result) > 1:
             # Some word from end of first chunk should appear in second chunk
-            first_chunk_end = result[0].split()[-2:]
-            second_chunk_start = result[1].split()[:2]
+            result[0].split()[-2:]
+            result[1].split()[:2]
             # There should be some overlap
             assert len(result) > 1

@@ -2,7 +2,7 @@
 
 import pytest
 
-from menos.services.linking import ExtractedLink, LinkExtractor
+from menos.services.linking import LinkExtractor
 
 
 class TestLinkExtractor:

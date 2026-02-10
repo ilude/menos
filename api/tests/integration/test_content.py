@@ -1,7 +1,7 @@
 """Integration tests for content endpoints."""
 
 import io
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -56,7 +56,6 @@ class TestLinkExtraction:
     @pytest.mark.asyncio
     async def test_extract_links_from_markdown(self):
         """Test that links are extracted from markdown content."""
-        from menos.models import ContentMetadata, LinkModel
         from menos.routers.content import _extract_and_store_links
         from menos.services.storage import SurrealDBRepository
 
@@ -368,6 +367,7 @@ class TestLinksEndpoints:
     async def test_get_links_404_when_content_not_found(self):
         """Test that GET /content/{id}/links returns 404 when content doesn't exist."""
         from fastapi import HTTPException
+
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
@@ -450,6 +450,7 @@ class TestLinksEndpoints:
     async def test_get_backlinks_404_when_content_not_found(self):
         """Test that GET /content/{id}/backlinks returns 404 when content doesn't exist."""
         from fastapi import HTTPException
+
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()

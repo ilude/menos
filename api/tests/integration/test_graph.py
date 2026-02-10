@@ -1,6 +1,5 @@
 """Integration tests for graph endpoints."""
 
-import pytest
 
 
 def test_get_graph_empty(authed_client):
@@ -24,6 +23,7 @@ def test_get_graph_requires_auth(client):
 def test_get_graph_with_content(authed_client, mock_surreal_repo):
     """Test GET /api/v1/graph with some content."""
     from datetime import UTC, datetime
+
     from menos.models import ContentMetadata, LinkModel
 
     # Setup mock data
@@ -89,6 +89,7 @@ def test_get_graph_with_content(authed_client, mock_surreal_repo):
 def test_get_graph_unresolved_links(authed_client, mock_surreal_repo):
     """Test GET /api/v1/graph includes unresolved links."""
     from datetime import UTC, datetime
+
     from menos.models import ContentMetadata, LinkModel
 
     node1 = ContentMetadata(
@@ -144,6 +145,7 @@ def test_get_neighborhood_requires_auth(client):
 def test_get_neighborhood_depth_1(authed_client, mock_surreal_repo):
     """Test GET /api/v1/graph/neighborhood/{id} with depth=1."""
     from datetime import UTC, datetime
+
     from menos.models import ContentMetadata, LinkModel
 
     center = ContentMetadata(
@@ -229,6 +231,7 @@ def test_get_neighborhood_depth_1(authed_client, mock_surreal_repo):
 def test_get_neighborhood_depth_2(authed_client, mock_surreal_repo):
     """Test GET /api/v1/graph/neighborhood/{id} with depth=2."""
     from datetime import UTC, datetime
+
     from menos.models import ContentMetadata, LinkModel
 
     node1 = ContentMetadata(
@@ -307,6 +310,7 @@ def test_get_neighborhood_depth_2(authed_client, mock_surreal_repo):
 def test_get_neighborhood_default_depth(authed_client, mock_surreal_repo):
     """Test GET /api/v1/graph/neighborhood/{id} uses depth=1 by default."""
     from datetime import UTC, datetime
+
     from menos.models import ContentMetadata
 
     center = ContentMetadata(
@@ -347,6 +351,7 @@ def test_get_neighborhood_depth_validation(authed_client, mock_surreal_repo):
 def test_get_neighborhood_isolated_node(authed_client, mock_surreal_repo):
     """Test GET /api/v1/graph/neighborhood/{id} for isolated node."""
     from datetime import UTC, datetime
+
     from menos.models import ContentMetadata
 
     isolated = ContentMetadata(
