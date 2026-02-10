@@ -186,7 +186,10 @@ class SurrealDBRepository:
         """
         result = self.db.select(f"content:{content_id}")
         if result:
-            return ContentMetadata(**result[0])
+            item = dict(result[0])
+            if "id" in item and hasattr(item["id"], "id"):
+                item["id"] = item["id"].id
+            return ContentMetadata(**item)
         return None
 
     async def list_content(
