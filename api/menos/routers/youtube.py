@@ -1,5 +1,6 @@
 """YouTube ingestion endpoints."""
 
+import asyncio
 import io
 import json
 import logging
@@ -11,7 +12,12 @@ from pydantic import BaseModel
 from menos.auth.dependencies import AuthenticatedKeyId
 from menos.models import ChunkModel, ContentMetadata
 from menos.services.chunking import ChunkingService
-from menos.services.di import get_minio_storage, get_surreal_repo
+from menos.services.classification import ClassificationService
+from menos.services.di import (
+    get_classification_service,
+    get_minio_storage,
+    get_surreal_repo,
+)
 from menos.services.embeddings import EmbeddingService, get_embedding_service
 from menos.services.llm import LLMService, get_llm_service
 from menos.services.storage import MinIOStorage, SurrealDBRepository
@@ -53,6 +59,7 @@ class YouTubeIngestResponse(BaseModel):
     chunks_created: int
     file_path: str
     summary: str | None = None
+    classification_status: str | None = None
 
 
 class YouTubeVideoInfo(BaseModel):
@@ -89,6 +96,7 @@ async def ingest_video(
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     llm_service: LLMService = Depends(get_llm_service),
     metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
+    classification_service: ClassificationService = Depends(get_classification_service),
 ):
     """Ingest a YouTube video transcript.
 
@@ -229,6 +237,40 @@ Provide:
     except Exception as e:
         logger.warning(f"Failed to generate summary for {video_id}: {e}")
 
+    # Launch classification as fire-and-forget background task
+    classification_status = None
+    min_len = classification_service.settings.classification_min_content_length
+    if len(transcript.full_text) >= min_len:
+        await surreal_repo.update_content_classification_status(content_id, "pending")
+        classification_status = "pending"
+
+        async def _classify_background():
+            try:
+                result = await classification_service.classify_content(
+                    content_id=content_id,
+                    content_text=transcript.full_text,
+                    content_type="youtube",
+                    title=video_title,
+                )
+                if result:
+                    await surreal_repo.update_content_classification(
+                        content_id, result.model_dump()
+                    )
+                else:
+                    await surreal_repo.update_content_classification_status(
+                        content_id, "failed"
+                    )
+            except Exception as e:
+                logger.warning("Background classification failed for %s: %s", content_id, e)
+                try:
+                    await surreal_repo.update_content_classification_status(
+                        content_id, "failed"
+                    )
+                except Exception:
+                    pass
+
+        asyncio.create_task(_classify_background())
+
     return YouTubeIngestResponse(
         id=content_id,
         video_id=video_id,
@@ -237,6 +279,7 @@ Provide:
         chunks_created=chunks_created,
         file_path=file_path,
         summary=summary,
+        classification_status=classification_status,
     )
 
 
@@ -247,6 +290,7 @@ async def upload_transcript(
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
+    classification_service: ClassificationService = Depends(get_classification_service),
 ):
     """Upload a pre-fetched YouTube transcript.
 
@@ -321,6 +365,41 @@ async def upload_transcript(
             await surreal_repo.create_chunk(chunk)
             chunks_created += 1
 
+    # Launch classification as fire-and-forget background task
+    classification_status = None
+    min_len = classification_service.settings.classification_min_content_length
+    if len(body.transcript_text) >= min_len:
+        await surreal_repo.update_content_classification_status(content_id, "pending")
+        classification_status = "pending"
+        transcript_text = body.transcript_text
+
+        async def _classify_background():
+            try:
+                result = await classification_service.classify_content(
+                    content_id=content_id,
+                    content_text=transcript_text,
+                    content_type="youtube",
+                    title=f"YouTube: {video_id}",
+                )
+                if result:
+                    await surreal_repo.update_content_classification(
+                        content_id, result.model_dump()
+                    )
+                else:
+                    await surreal_repo.update_content_classification_status(
+                        content_id, "failed"
+                    )
+            except Exception as e:
+                logger.warning("Background classification failed for %s: %s", content_id, e)
+                try:
+                    await surreal_repo.update_content_classification_status(
+                        content_id, "failed"
+                    )
+                except Exception:
+                    pass
+
+        asyncio.create_task(_classify_background())
+
     return YouTubeIngestResponse(
         id=content_id,
         video_id=video_id,
@@ -328,6 +407,7 @@ async def upload_transcript(
         transcript_length=len(body.transcript_text),
         chunks_created=chunks_created,
         file_path=transcript_path,
+        classification_status=classification_status,
     )
 
 

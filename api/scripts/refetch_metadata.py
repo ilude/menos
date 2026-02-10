@@ -6,9 +6,7 @@ import io
 import json
 import logging
 
-from menos.config import settings
-from menos.services.di import get_storage_context
-from menos.services.llm import LLMService
+from menos.services.di import build_openrouter_chain, get_storage_context
 from menos.services.youtube_metadata import YouTubeMetadataService
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -19,10 +17,7 @@ async def refetch_all():
     """Refetch metadata and regenerate summaries for all YouTube videos."""
     async with get_storage_context() as (minio, surreal):
         metadata_service = YouTubeMetadataService()
-        llm_service = LLMService(
-            base_url=settings.ollama_url,
-            model=settings.ollama_summary_model,
-        )
+        llm_service = build_openrouter_chain()
 
         # List all YouTube videos
         items, _ = await surreal.list_content(content_type="youtube", limit=100)

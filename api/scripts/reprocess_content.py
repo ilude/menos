@@ -496,16 +496,20 @@ def _create_entity_resolution_service(surreal_repo: SurrealDBRepository):
         return None
 
     try:
+        from menos.services.di import build_openrouter_chain
         from menos.services.entity_extraction import EntityExtractionService
         from menos.services.entity_resolution import EntityResolutionService
         from menos.services.keyword_matcher import EntityKeywordMatcher
         from menos.services.llm import OllamaLLMProvider
 
-        # Create LLM provider
-        llm_provider = OllamaLLMProvider(
-            base_url=settings.ollama_url,
-            model=settings.entity_extraction_model,
-        )
+        # Create LLM provider based on config
+        if settings.entity_extraction_provider == "openrouter":
+            llm_provider = build_openrouter_chain(settings.entity_extraction_model)
+        else:
+            llm_provider = OllamaLLMProvider(
+                base_url=settings.ollama_url,
+                model=settings.entity_extraction_model,
+            )
 
         # Create extraction service
         extraction_service = EntityExtractionService(

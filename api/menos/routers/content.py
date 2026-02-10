@@ -1,5 +1,7 @@
 """Content CRUD endpoints."""
 
+import asyncio
+import logging
 import uuid
 from typing import Annotated
 
@@ -8,10 +10,13 @@ from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
 from menos.models import ContentMetadata, LinkModel
-from menos.services.di import get_minio_storage, get_surreal_repo
+from menos.services.classification import ClassificationService
+from menos.services.di import get_classification_service, get_minio_storage, get_surreal_repo
 from menos.services.frontmatter import FrontmatterParser
 from menos.services.linking import LinkExtractor
 from menos.services.storage import MinIOStorage, SurrealDBRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/content", tags=["content"])
 
@@ -157,6 +162,7 @@ async def create_content(
     tags: Annotated[list[str] | None, Query()] = None,
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+    classification_service: ClassificationService = Depends(get_classification_service),
 ):
     """Upload new content."""
     content_id = str(uuid.uuid4())
@@ -209,8 +215,45 @@ async def create_content(
             surreal_repo=surreal_repo,
         )
 
+    # Launch classification as fire-and-forget background task
+    text_content = file_content.decode("utf-8")
+    final_content_id = created.id or content_id
+    min_len = classification_service.settings.classification_min_content_length
+    if len(text_content) >= min_len:
+        await surreal_repo.update_content_classification_status(final_content_id, "pending")
+        final_title = metadata.title or "Untitled"
+
+        async def _classify_background():
+            try:
+                result = await classification_service.classify_content(
+                    content_id=final_content_id,
+                    content_text=text_content,
+                    content_type=content_type,
+                    title=final_title,
+                )
+                if result:
+                    await surreal_repo.update_content_classification(
+                        final_content_id, result.model_dump()
+                    )
+                else:
+                    await surreal_repo.update_content_classification_status(
+                        final_content_id, "failed"
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Background classification failed for %s: %s", final_content_id, e
+                )
+                try:
+                    await surreal_repo.update_content_classification_status(
+                        final_content_id, "failed"
+                    )
+                except Exception:
+                    pass
+
+        asyncio.create_task(_classify_background())
+
     return ContentCreateResponse(
-        id=created.id or content_id,
+        id=final_content_id,
         file_path=file_path,
         file_size=file_size,
     )
