@@ -121,11 +121,20 @@ async def export_summaries(
             channel = (
                 item.metadata.get("channel_title") if item.metadata else None
             )
-            summary_model = (
-                item.metadata.get("summary_model") if item.metadata else None
-            )
+            summary_model = None
 
             logger.info(f"Exporting {title}...")
+
+            # Read metadata.json from MinIO (has summary_model and channel info)
+            metadata_json_path = f"youtube/{video_id}/metadata.json"
+            try:
+                meta_bytes = await minio.download(metadata_json_path)
+                minio_meta = json.loads(meta_bytes.decode("utf-8"))
+                summary_model = minio_meta.get("summary_model")
+                if not channel:
+                    channel = minio_meta.get("channel_title")
+            except Exception:
+                pass
 
             # Read summary from MinIO
             summary_path = f"youtube/{video_id}/summary.md"
@@ -136,15 +145,27 @@ async def export_summaries(
                 logger.warning(f"  No summary found: {e}")
                 summary_text = "(No summary available)"
 
-            # Get classification data if available
+            # Get classification data from raw SurrealDB record
             classification_tier = None
             classification_score = None
             classification_labels = None
 
-            if item.classification_status == "completed" and item.classification:
-                classification_tier = item.classification.get("tier")
-                classification_score = item.classification.get("score")
-                classification_labels = item.classification.get("labels")
+            try:
+                raw = surreal.db.query(
+                    "SELECT classification_status, classification_tier, "
+                    "classification_score, metadata.classification.labels AS labels "
+                    "FROM content WHERE id = $id",
+                    {"id": item.id},
+                )
+                parsed = surreal._parse_query_result(raw)
+                if parsed:
+                    rec = parsed[0]
+                    if rec.get("classification_status") == "completed":
+                        classification_tier = rec.get("classification_tier")
+                        classification_score = rec.get("classification_score")
+                        classification_labels = rec.get("labels")
+            except Exception as e:
+                logger.warning(f"  Could not fetch classification: {e}")
 
             # Create frontmatter
             frontmatter = create_frontmatter(
