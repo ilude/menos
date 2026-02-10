@@ -957,3 +957,100 @@ Periodically re-fetch external metadata:
 4. **Entity deduplication UI**: Do we need a user-facing interface for managing duplicates, or is API-only sufficient for v1?
 
 5. **Cross-content entity inference**: If Video A mentions "that transformer paper" without naming it, can we infer it from context of other videos?
+
+---
+
+## 16. Future Refinements (Backlog)
+
+> Refinements identified during knowledge base review, deferred to future phases.
+> Originally tracked in `entity-extraction-future-refinements.md`, consolidated here.
+
+### 16.1 Architecture Refinements
+
+**Orchestrator Pattern** (see also [docs/specs/orchestrator.md](orchestrator.md)):
+Use tool-less reasoning agents for LLM extraction to prevent nested deadlock:
+
+```python
+# Coordinator has all data tools
+entity_coordinator = Agent(
+    model='anthropic:claude-3-5-sonnet',
+    tools=[fetch_content, fetch_urls, search_existing_entities, store_entity]
+)
+
+# Tool-less reasoning agents (no tools = no deadlock risk)
+entity_analyzer = Agent(model='haiku', system_prompt="Extract entities...")
+topic_hierarchizer = Agent(model='haiku', system_prompt="Build topic hierarchies...")
+```
+
+**Message Bus Integration** (see also [docs/specs/message-bus.md](message-bus.md)):
+Queue-based async processing using Celery with task queues:
+- `entity_extraction_queue` - LLM-based extraction (slower)
+- `entity_metadata_queue` - External API calls (rate-limited)
+- `entity_resolution_queue` - Normalization + DB lookups (fast)
+
+**Working Memory for Extraction State:**
+Store extraction progress in database for resumability via `entity_extraction_progress` field on content.
+
+### 16.2 New Entity Types
+
+**Insights** (from [docs/research/evermemos-inspiration.md](../research/evermemos-inspiration.md)):
+Atomic, independently-searchable learnings from content (e.g., "Dependency injection enables swapping implementations").
+
+**Techniques** (from [docs/backlog/discussions-needed.md](../backlog/discussions-needed.md)):
+Actionable methods matchable to projects (e.g., "Semantic Chunking" with prerequisites, alternatives, difficulty).
+
+### 16.3 Recommendation Engine Integration
+
+See also [docs/specs/recommendation-engine.md](recommendation-engine.md).
+
+- **Entity-aware preference vectors**: Track user affinity per entity, update on content ratings
+- **Multi-signal scoring**: Add `w_entity * entity_match_score` to recommendation formula
+- **Entity-based cold-start**: Bootstrap recommendations from entities when ratings are sparse
+
+### 16.4 Memory Type Taxonomy
+
+Map entities to EverMemOS 7-type taxonomy via `memory_category` field:
+
+| Entity Type | Memory Category |
+|-------------|-----------------|
+| topic | semantic_knowledge |
+| insight | semantic_knowledge OR fact |
+| repo | profile |
+| paper | semantic_knowledge |
+| tool | profile |
+| person | profile |
+
+### 16.5 Search Enhancements
+
+- **Multi-round recall**: Exact entity match → related entities → LLM-guided refinement
+- **Entity embeddings**: Add 1024-dim embeddings to entities for semantic entity search
+
+### 16.6 Prompt Engineering Improvements
+
+- **Verbalized sampling**: Request 3-5 alternative entity sets with probabilities
+- **Multi-stage prompting**: Quality assessment → extraction → verification
+- **Model hierarchy**: Orchestrator (Sonnet) → Extraction (Haiku) → Synthesis (Sonnet)
+
+### 16.7 Scalability
+
+- **Rate limit tracking in Redis**: Shared across workers
+- **Incremental metadata updates**: Only re-fetch entities older than 7 days
+- **Batch processing with deduplication**: Reduce DB roundtrips during reprocessing
+
+### 16.8 UI Considerations
+
+See also [docs/specs/ui-roadmap.md](ui-roadmap.md).
+
+- **Entity sidebar**: Entities from current conversation, related content, quick actions
+- **Topic hierarchy navigation**: Breadcrumb "AI → LLMs → RAG" with clickable levels
+- **Graph visualization**: Color by type, size by mentions, cluster by hierarchy
+
+### 16.9 Backlog Priority Order
+
+| Phase | Refinements |
+|-------|-------------|
+| **Phase 2** | Message bus integration, async processing |
+| **Phase 3** | Entity embeddings, preference learning |
+| **Phase 4** | Insights entity type, techniques entity type |
+| **Phase 5** | UI integration (sidebar, graph enhancements) |
+| **Phase 6** | Multi-round recall, model hierarchy |
