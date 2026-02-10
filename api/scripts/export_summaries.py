@@ -92,7 +92,7 @@ async def export_summaries(
 
     async with get_storage_context() as (minio, surreal):
         # List YouTube content
-        limit = 1 if video_id else 1000
+        limit = 1000
         items, _ = await surreal.list_content(content_type="youtube", limit=limit)
 
         if video_id:
