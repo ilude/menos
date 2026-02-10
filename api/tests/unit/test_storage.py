@@ -764,9 +764,9 @@ class TestListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python", "count": 3},
-                    {"tag": "api", "count": 2},
-                    {"tag": "docker", "count": 1},
+                    {"tags": ["python", "api"]},
+                    {"tags": ["python", "docker"]},
+                    {"tags": ["python", "api"]},
                 ]
             }
         ]
@@ -791,8 +791,8 @@ class TestListTagsWithCounts:
     async def test_tags_direct_list_format(self):
         mock_db = MagicMock()
         mock_db.query.return_value = [
-            {"tag": "ml", "count": 2},
-            {"tag": "nlp", "count": 1},
+            {"tags": ["ml"]},
+            {"tags": ["ml", "nlp"]},
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
@@ -805,7 +805,7 @@ class TestListTagsWithCounts:
     async def test_tags_skips_none_tags(self):
         mock_db = MagicMock()
         mock_db.query.return_value = [
-            {"result": [{"tag": "python", "count": 1}, {"tag": None, "count": 0}, {"other": "x"}]}
+            {"result": [{"tags": ["python"]}, {"tags": [None]}, {"other": "x"}]}
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")

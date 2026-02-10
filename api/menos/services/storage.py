@@ -333,24 +333,23 @@ class SurrealDBRepository:
             List of dicts with 'name' and 'count' keys, sorted by count (desc) then name (asc)
         """
         result = self.db.query(
-            "SELECT tag, count() AS count FROM "
-            "(SELECT array::flatten(tags) AS tag FROM content WHERE tags != NONE) "
-            "GROUP BY tag"
+            "SELECT tags FROM content WHERE tags != NONE AND array::len(tags) > 0"
         )
-
         raw_items = self._parse_query_result(result)
 
-        tags_data = []
+        # Count occurrences of each tag across all content
+        tag_counts: dict[str, int] = {}
         for item in raw_items:
-            tag = item.get("tag")
-            count = item.get("count", 0)
-            if tag:
-                tags_data.append({"name": tag, "count": count})
+            tags = item.get("tags", [])
+            if isinstance(tags, list):
+                for tag in tags:
+                    if isinstance(tag, str):
+                        tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
         # Sort by count descending, then by name ascending
-        tags_data.sort(key=lambda x: (-x["count"], x["name"]))
+        sorted_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))
 
-        return tags_data
+        return [{"name": name, "count": count} for name, count in sorted_tags]
 
     async def find_content_by_title(self, title: str) -> ContentMetadata | None:
         """Find content by exact title match.

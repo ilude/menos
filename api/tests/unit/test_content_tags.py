@@ -439,9 +439,9 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python", "count": 1},
-                    {"tag": "api", "count": 1},
-                    {"tag": "database", "count": 1},
+                    {"tags": ["python"]},
+                    {"tags": ["api"]},
+                    {"tags": ["database"]},
                 ]
             }
         ]
@@ -461,9 +461,9 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python", "count": 2},
-                    {"tag": "api", "count": 3},
-                    {"tag": "database", "count": 1},
+                    {"tags": ["python", "api"]},
+                    {"tags": ["api", "database"]},
+                    {"tags": ["api"]},
                 ]
             }
         ]
@@ -473,8 +473,8 @@ class TestSurrealDBRepositoryListTagsWithCounts:
 
         assert len(result) == 3
         assert result[0] == {"name": "api", "count": 3}
-        assert result[1] == {"name": "python", "count": 2}
-        assert result[2] == {"name": "database", "count": 1}
+        assert result[1] == {"name": "database", "count": 1}
+        assert result[2] == {"name": "python", "count": 1}
 
     @pytest.mark.asyncio
     async def test_list_tags_with_counts_empty(self):
@@ -492,8 +492,8 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         """Test listing tags when query returns list without result key."""
         mock_db = MagicMock()
         mock_db.query.return_value = [
-            {"tag": "python", "count": 1},
-            {"tag": "api", "count": 1},
+            {"tags": ["python"]},
+            {"tags": ["api"]},
         ]
 
         repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
@@ -510,10 +510,10 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python", "count": 3},
-                    {"tag": "zebra", "count": 2},
-                    {"tag": "apple", "count": 2},
-                    {"tag": "database", "count": 1},
+                    {"tags": ["python", "zebra"]},
+                    {"tags": ["python", "apple"]},
+                    {"tags": ["python", "zebra", "apple"]},
+                    {"tags": ["database"]},
                 ]
             }
         ]
