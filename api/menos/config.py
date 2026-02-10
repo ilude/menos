@@ -30,10 +30,9 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_bucket: str = "menos"
 
-    # Ollama
+    # Ollama (embeddings only)
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "mxbai-embed-large"
-    ollama_summary_model: str = "qwen3:latest"
 
     # Auth
     ssh_public_keys_path: Path = Path("/keys")
@@ -46,12 +45,12 @@ class Settings(BaseSettings):
     youtube_api_key: str | None = None
 
     # Agent settings
-    agent_expansion_provider: LLMProviderType = "ollama"
-    agent_expansion_model: str = "qwen3:latest"
+    agent_expansion_provider: LLMProviderType = "openrouter"
+    agent_expansion_model: str = ""
     agent_rerank_provider: RerankerProviderType = "none"
     agent_rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
-    agent_synthesis_provider: LLMProviderType = "ollama"
-    agent_synthesis_model: str = "qwen3:latest"
+    agent_synthesis_provider: LLMProviderType = "openrouter"
+    agent_synthesis_model: str = ""
 
     # Cloud LLM API keys
     openai_api_key: str | None = None
@@ -60,8 +59,16 @@ class Settings(BaseSettings):
 
     # Entity Extraction
     entity_extraction_enabled: bool = True
-    entity_extraction_provider: LLMProviderType = "ollama"
-    entity_extraction_model: str = "qwen3:latest"
+    entity_extraction_provider: LLMProviderType = "openrouter"
+    entity_extraction_model: str = ""
+
+    # Content Classification
+    classification_enabled: bool = True
+    classification_provider: LLMProviderType = "openrouter"
+    classification_model: str = ""
+    classification_max_new_labels: int = 3
+    classification_interest_top_n: int = 15
+    classification_min_content_length: int = 500
 
     # API Keys for Metadata Fetching (optional)
     semantic_scholar_api_key: str | None = None
