@@ -136,7 +136,11 @@ class SurrealDBRepository:
         Returns:
             List of record dictionaries
         """
-        if not result or not isinstance(result, list) or len(result) == 0:
+        if (
+            not result
+            or not isinstance(result, list)
+            or len(result) == 0
+        ):
             return []
         first = result[0]
         if isinstance(first, dict) and "result" in first:
@@ -246,7 +250,9 @@ class SurrealDBRepository:
             Exception: If update fails
         """
         metadata.updated_at = datetime.now(UTC)
-        result = self.db.update(f"content:{content_id}", metadata.model_dump(exclude_none=True))
+        result = self.db.update(
+            f"content:{content_id}", metadata.model_dump(exclude_none=True)
+        )
         if result:
             return ContentMetadata(**result[0])
         raise RuntimeError(f"Failed to update content {content_id}")
@@ -336,10 +342,7 @@ class SurrealDBRepository:
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
             # Sort by count descending, then by name ascending
-            sorted_tags = sorted(
-                tag_counts.items(),
-                key=lambda x: (-x[1], x[0])
-            )
+            sorted_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))
 
             tags_data = [{"name": name, "count": count} for name, count in sorted_tags]
 
@@ -426,10 +429,18 @@ class SurrealDBRepository:
             # Convert record references to simple IDs
             if "source" in item_copy:
                 source_val = item_copy["source"]
-                item_copy["source"] = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+                item_copy["source"] = (
+                    source_val.id
+                    if hasattr(source_val, "id")
+                    else str(source_val).split(":")[-1]
+                )
             if "target" in item_copy and item_copy["target"]:
                 target_val = item_copy["target"]
-                item_copy["target"] = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+                item_copy["target"] = (
+                    target_val.id
+                    if hasattr(target_val, "id")
+                    else str(target_val).split(":")[-1]
+                )
             if "id" in item_copy and hasattr(item_copy["id"], "id"):
                 item_copy["id"] = item_copy["id"].id
             links.append(LinkModel(**item_copy))
@@ -456,10 +467,18 @@ class SurrealDBRepository:
             # Convert record references to simple IDs
             if "source" in item_copy:
                 source_val = item_copy["source"]
-                item_copy["source"] = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+                item_copy["source"] = (
+                    source_val.id
+                    if hasattr(source_val, "id")
+                    else str(source_val).split(":")[-1]
+                )
             if "target" in item_copy and item_copy["target"]:
                 target_val = item_copy["target"]
-                item_copy["target"] = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+                item_copy["target"] = (
+                    target_val.id
+                    if hasattr(target_val, "id")
+                    else str(target_val).split(":")[-1]
+                )
             if "id" in item_copy and hasattr(item_copy["id"], "id"):
                 item_copy["id"] = item_copy["id"].id
             links.append(LinkModel(**item_copy))
@@ -530,14 +549,22 @@ class SurrealDBRepository:
                 # Convert record references to simple IDs
                 if "source" in item_copy:
                     source_val = item_copy["source"]
-                    source_id = source_val.id if hasattr(source_val, "id") else str(source_val).split(":")[-1]
+                    source_id = (
+                        source_val.id
+                        if hasattr(source_val, "id")
+                        else str(source_val).split(":")[-1]
+                    )
                     item_copy["source"] = source_id
                 else:
                     continue
 
                 if "target" in item_copy and item_copy["target"]:
                     target_val = item_copy["target"]
-                    target_id = target_val.id if hasattr(target_val, "id") else str(target_val).split(":")[-1]
+                    target_id = (
+                        target_val.id
+                        if hasattr(target_val, "id")
+                        else str(target_val).split(":")[-1]
+                    )
                     item_copy["target"] = target_id
                 else:
                     item_copy["target"] = None
@@ -548,7 +575,9 @@ class SurrealDBRepository:
                 # Only include links where both source and target are in node set
                 # (or target is None for unresolved links)
                 link = LinkModel(**item_copy)
-                if link.source in node_ids and (link.target is None or link.target in node_ids):
+                if link.source in node_ids and (
+                    link.target is None or link.target in node_ids
+                ):
                     edges.append(link)
 
         return nodes, edges
@@ -827,7 +856,9 @@ class SurrealDBRepository:
             edge.id = self._extract_entity_id(record["id"])
         return edge
 
-    async def get_entities_for_content(self, content_id: str) -> list[tuple[EntityModel, ContentEntityEdge]]:
+    async def get_entities_for_content(
+        self, content_id: str
+    ) -> list[tuple[EntityModel, ContentEntityEdge]]:
         """Get all entities linked to a content item.
 
         Args:

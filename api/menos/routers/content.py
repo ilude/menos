@@ -106,7 +106,9 @@ async def list_tags(
 async def list_content(
     key_id: AuthenticatedKeyId,
     content_type: Annotated[str | None, Query(description="Filter by content type")] = None,
-    tags: Annotated[str | None, Query(description="Filter by tags (comma-separated, must have ALL)")] = None,
+    tags: Annotated[
+        str | None, Query(description="Filter by tags (comma-separated, must have ALL)")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),

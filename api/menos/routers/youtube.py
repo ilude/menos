@@ -205,9 +205,17 @@ async def ingest_video(
     try:
         # Build context from metadata
         title_text = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
-        description_text = yt_metadata.description[:1000] if yt_metadata and yt_metadata.description else ""
+        description_text = (
+            yt_metadata.description[:1000]
+            if yt_metadata and yt_metadata.description
+            else ""
+        )
         channel_text = yt_metadata.channel_title if yt_metadata else "Unknown"
-        links_text = "\n".join(yt_metadata.description_urls[:10]) if yt_metadata and yt_metadata.description_urls else "None"
+        links_text = (
+            "\n".join(yt_metadata.description_urls[:10])
+            if yt_metadata and yt_metadata.description_urls
+            else "None"
+        )
 
         # Truncate transcript if too long (qwen3 context limit)
         transcript_for_summary = transcript.full_text[:12000]

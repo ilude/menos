@@ -21,7 +21,8 @@ from menos.services.llm import LLMProvider
 logger = logging.getLogger(__name__)
 
 # Prompt template for entity extraction
-EXTRACTION_PROMPT_TEMPLATE = """You are an expert content analyst. Your primary job is TOPIC EXTRACTION.
+EXTRACTION_PROMPT_TEMPLATE = """You are an expert content analyst. \
+Your primary job is TOPIC EXTRACTION.
 
 CONTENT TYPE: {content_type}
 CONTENT TITLE: {title}

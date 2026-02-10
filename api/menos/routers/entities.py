@@ -92,7 +92,10 @@ class DuplicatesResponse(BaseModel):
 @router.get("", response_model=EntityListResponse)
 async def list_entities(
     key_id: AuthenticatedKeyId,
-    entity_type: Annotated[str | None, Query(description="Filter by entity type (topic, repo, paper, tool, person)")] = None,
+    entity_type: Annotated[
+        str | None,
+        Query(description="Filter by entity type (topic, repo, paper, tool, person)"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),

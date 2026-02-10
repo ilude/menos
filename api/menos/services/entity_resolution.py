@@ -133,7 +133,11 @@ class EntityResolutionService:
                 entity_id=resolved.id or "",
                 edge_type=edge_type,
                 confidence=0.9,
-                source=EntitySource.URL_DETECTED if entity.source == EntitySource.URL_DETECTED else EntitySource.AI_EXTRACTED,
+                source=(
+                    EntitySource.URL_DETECTED
+                    if entity.source == EntitySource.URL_DETECTED
+                    else EntitySource.AI_EXTRACTED
+                ),
             )
             try:
                 await self.repo.create_content_entity_edge(edge)
@@ -260,7 +264,11 @@ class EntityResolutionService:
                         "stars": repo_meta.stars,
                         "language": repo_meta.language,
                         "topics": repo_meta.topics,
-                        "fetched_at": repo_meta.fetched_at.isoformat() if repo_meta.fetched_at else None,
+                        "fetched_at": (
+                            repo_meta.fetched_at.isoformat()
+                            if repo_meta.fetched_at
+                            else None
+                        ),
                     })
                     if repo_meta.description:
                         name = repo_meta.name or repo
@@ -292,10 +300,20 @@ class EntityResolutionService:
                     name = paper_meta.title or name
                     metadata.update({
                         "authors": paper_meta.authors,
-                        "abstract": paper_meta.abstract[:500] if paper_meta.abstract else None,
+                        "abstract": (
+                            paper_meta.abstract[:500] if paper_meta.abstract else None
+                        ),
                         "doi": paper_meta.doi,
-                        "published_at": paper_meta.published_at.isoformat() if paper_meta.published_at else None,
-                        "fetched_at": paper_meta.fetched_at.isoformat() if paper_meta.fetched_at else None,
+                        "published_at": (
+                            paper_meta.published_at.isoformat()
+                            if paper_meta.published_at
+                            else None
+                        ),
+                        "fetched_at": (
+                            paper_meta.fetched_at.isoformat()
+                            if paper_meta.fetched_at
+                            else None
+                        ),
                     })
             except Exception as e:
                 logger.warning("Failed to fetch arXiv metadata for %s: %s", arxiv_id, e)

@@ -40,7 +40,9 @@ class GraphData(BaseModel):
 @router.get("", response_model=GraphData)
 async def get_graph(
     key_id: AuthenticatedKeyId,
-    tags: Annotated[str | None, Query(description="Filter by tags (comma-separated, must have ALL)")] = None,
+    tags: Annotated[
+        str | None, Query(description="Filter by tags (comma-separated, must have ALL)")
+    ] = None,
     content_type: Annotated[str | None, Query(description="Filter by content type")] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),

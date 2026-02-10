@@ -235,10 +235,14 @@ class ClassificationService:
 
         # Build prompt
         prompt = CLASSIFICATION_PROMPT_TEMPLATE.format(
-            existing_labels=", ".join(existing_labels[:50]) if existing_labels else "None yet",
+            existing_labels=(
+                ", ".join(existing_labels[:50]) if existing_labels else "None yet"
+            ),
             interest_topics=", ".join(interests.get("topics", [])) or "None yet",
             interest_tags=", ".join(interests.get("tags", [])) or "None yet",
-            interest_channels=", ".join(interests.get("channels", [])) or "None yet",
+            interest_channels=(
+                ", ".join(interests.get("channels", [])) or "None yet"
+            ),
             max_new_labels=self.settings.classification_max_new_labels,
             content_text=truncated,
         )
