@@ -69,6 +69,9 @@ services:
       - WEBSHARE_PROXY_USERNAME=${WEBSHARE_PROXY_USERNAME}
       - WEBSHARE_PROXY_PASSWORD=${WEBSHARE_PROXY_PASSWORD}
       - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ${DATA_PATH:-/apps/menos/data}/keys:/keys:ro
     restart: unless-stopped
