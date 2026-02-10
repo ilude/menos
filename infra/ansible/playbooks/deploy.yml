@@ -60,9 +60,10 @@
         recurse: true
 
     # --- Pre-flight checks ---
-    - name: Mark git repo as safe directory
-      ansible.builtin.command:
-        cmd: git config --global --add safe.directory /project
+    - name: Configure git for container environment
+      ansible.builtin.shell: |
+        git config --global --add safe.directory /project
+        git config --global core.autocrlf input
       delegate_to: localhost
       changed_when: false
 
