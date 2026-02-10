@@ -30,11 +30,11 @@ def normalize_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("-", "").replace("_", "")
 
 
-def find_near_duplicates[T](
-    entities: list[T],
+def find_near_duplicates(
+    entities: list,
     get_normalized_name: callable,
     max_distance: int = 1,
-) -> list[list[T]]:
+) -> list[list]:
     """Find entities that are likely duplicates based on Levenshtein edit distance.
 
     Args:
@@ -48,7 +48,7 @@ def find_near_duplicates[T](
     if not entities:
         return []
 
-    groups: list[list[T]] = []
+    groups: list[list] = []
     used_indices: set[int] = set()
 
     for i, e1 in enumerate(entities):
