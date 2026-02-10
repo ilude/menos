@@ -123,18 +123,21 @@ async def export_summaries(
             )
             summary_model = None
 
-            logger.info(f"Exporting {title}...")
-
-            # Read metadata.json from MinIO (has summary_model and channel info)
+            # Read metadata.json from MinIO (has summary_model, channel, and real title)
             metadata_json_path = f"youtube/{video_id}/metadata.json"
             try:
                 meta_bytes = await minio.download(metadata_json_path)
                 minio_meta = json.loads(meta_bytes.decode("utf-8"))
                 summary_model = minio_meta.get("summary_model")
+                # Prefer MinIO title (updated by refetch) over SurrealDB title
+                if minio_meta.get("title"):
+                    title = minio_meta["title"]
                 if not channel:
                     channel = minio_meta.get("channel_title")
             except Exception:
                 pass
+
+            logger.info(f"Exporting {title}...")
 
             # Read summary from MinIO
             summary_path = f"youtube/{video_id}/summary.md"
