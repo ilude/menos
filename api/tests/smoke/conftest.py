@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -86,6 +87,103 @@ def smoke_authed_headers(smoke_request_signer):
         )
 
     return _make_headers
+
+
+@pytest.fixture(scope="session")
+def smoke_authed_get(smoke_http_client, smoke_base_url, smoke_authed_headers):
+    """Helper fixture for authenticated GET requests.
+
+    Usage:
+        response = smoke_authed_get("/api/v1/content")
+        assert response.status_code == 200
+    """
+    parsed = urlparse(smoke_base_url)
+    host = parsed.netloc or "localhost"
+
+    def _get(path: str) -> httpx.Response:
+        """Execute authenticated GET request.
+
+        Args:
+            path: Request path (must start with /)
+
+        Returns:
+            httpx.Response object
+        """
+        headers = smoke_authed_headers("GET", path, host=host)
+        return smoke_http_client.get(path, headers=headers)
+
+    return _get
+
+
+@pytest.fixture(scope="session")
+def smoke_first_content_id(smoke_authed_get):
+    """Get the first content item ID from the database.
+
+    Returns:
+        Content item ID string
+
+    Raises:
+        pytest.skip: If no content items exist
+    """
+    response = smoke_authed_get("/api/v1/content?limit=1")
+    assert response.status_code == 200, (
+        f"Failed to fetch content: {response.status_code}"
+    )
+
+    data = response.json()
+    items = data.get("items", [])
+
+    if not items:
+        pytest.skip("No content items in database")
+
+    return items[0]["id"]
+
+
+@pytest.fixture(scope="session")
+def smoke_first_youtube_video_id(smoke_authed_get):
+    """Get the first YouTube video ID from the database.
+
+    Returns:
+        YouTube video_id string
+
+    Raises:
+        pytest.skip: If no YouTube videos exist
+    """
+    response = smoke_authed_get("/api/v1/youtube")
+    assert response.status_code == 200, (
+        f"Failed to fetch YouTube videos: {response.status_code}"
+    )
+
+    videos = response.json()
+
+    if not videos:
+        pytest.skip("No YouTube videos in database")
+
+    return videos[0]["video_id"]
+
+
+@pytest.fixture(scope="session")
+def smoke_first_entity_id(smoke_authed_get):
+    """Get the first entity ID from the database.
+
+    Returns:
+        Entity ID string
+
+    Raises:
+        pytest.skip: If no entities exist
+    """
+    response = smoke_authed_get("/api/v1/entities?limit=1")
+    assert response.status_code == 200, (
+        f"Failed to fetch entities: {response.status_code}"
+    )
+
+    data = response.json()
+    items = data.get("items", [])
+
+    if not items:
+        pytest.skip("No entities in database")
+
+    return items[0]["id"]
 
 
 def pytest_configure(config):
