@@ -1,11 +1,14 @@
 """Cloud LLM provider implementations for OpenAI, Anthropic, and OpenRouter."""
 
 import asyncio
+import logging
 from typing import Any
 
 import httpx
 
 from menos.services.llm import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider:
@@ -312,6 +315,69 @@ class OpenRouterProvider:
             self.client = None
 
 
+class FallbackProvider:
+    """LLM provider that tries multiple providers in order until one succeeds."""
+
+    def __init__(self, providers: list[tuple[str, LLMProvider]]):
+        """Initialize with an ordered list of (name, provider) tuples.
+
+        Args:
+            providers: Ordered list of (name, provider) to try in sequence
+        """
+        if not providers:
+            raise ValueError("FallbackProvider requires at least one provider")
+        self.providers = providers
+
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        timeout: float = 60.0,
+    ) -> str:
+        """Try each provider in order until one succeeds.
+
+        Args:
+            prompt: The user message/prompt
+            system_prompt: Optional system message to guide generation
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature (0.0-2.0)
+            timeout: Request timeout in seconds
+
+        Returns:
+            Generated text from the first successful provider
+
+        Raises:
+            RuntimeError: If all providers fail
+        """
+        errors: list[tuple[str, Exception]] = []
+
+        for name, provider in self.providers:
+            logger.info("FallbackProvider: trying '%s'", name)
+            try:
+                result = await provider.generate(
+                    prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    timeout=timeout,
+                )
+                return result
+            except Exception as exc:
+                logger.warning("FallbackProvider: '%s' failed: %s", name, exc)
+                errors.append((name, exc))
+
+        summary = "; ".join(f"{n}: {e}" for n, e in errors)
+        raise RuntimeError(f"All providers failed: {summary}")
+
+    async def close(self) -> None:
+        """Close all underlying providers."""
+        for _, provider in self.providers:
+            await provider.close()
+
+
 class NoOpLLMProvider:
     """No-operation LLM provider for testing or disabling LLM features.
 
@@ -361,3 +427,4 @@ _openai: LLMProvider = OpenAIProvider(api_key="test")
 _anthropic: LLMProvider = AnthropicProvider(api_key="test")
 _openrouter: LLMProvider = OpenRouterProvider(api_key="test")
 _noop: LLMProvider = NoOpLLMProvider()
+_fallback: LLMProvider = FallbackProvider([("noop", NoOpLLMProvider())])

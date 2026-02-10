@@ -976,6 +976,131 @@ class SurrealDBRepository:
         raw_items = self._parse_query_result(result)
         return [self._parse_entity(item) for item in raw_items]
 
+    # ==================== Classification Methods ====================
+
+    async def update_content_classification_status(
+        self,
+        content_id: str,
+        status: str,
+    ) -> None:
+        """Update classification status on content.
+
+        Args:
+            content_id: Content ID
+            status: Status string (pending, processing, completed, failed)
+        """
+        self.db.query(
+            """
+            UPDATE content SET
+                classification_status = $status,
+                updated_at = time::now()
+            WHERE id = $content_id
+            """,
+            {"content_id": f"content:{content_id}", "status": status},
+        )
+
+    async def update_content_classification(
+        self,
+        content_id: str,
+        classification_dict: dict,
+    ) -> None:
+        """Store classification result on content using targeted UPDATE.
+
+        Merges classification into metadata without clobbering other keys.
+        Sets top-level indexed fields for queryability.
+
+        Args:
+            content_id: Content ID
+            classification_dict: Classification result as dict
+        """
+        self.db.query(
+            """
+            UPDATE content SET
+                metadata.classification = $data,
+                classification_status = 'completed',
+                classification_tier = $tier,
+                classification_score = $score,
+                classification_at = time::now(),
+                updated_at = time::now()
+            WHERE id = $content_id
+            """,
+            {
+                "content_id": f"content:{content_id}",
+                "data": classification_dict,
+                "tier": classification_dict.get("tier", ""),
+                "score": classification_dict.get("quality_score", 0),
+            },
+        )
+
+    async def get_interest_profile(
+        self,
+        top_n: int = 15,
+        recent_days: int = 90,
+    ) -> dict[str, list[str]]:
+        """Get multi-signal interest profile for classification bias.
+
+        Derives interests from:
+        1. Entity topic discusses edges (highest weight)
+        2. Tag frequency with recency weighting
+        3. Channel affinity for YouTube (repeat ingestion = strong signal)
+
+        Args:
+            top_n: Number of top items per signal
+            recent_days: Time window in days for recency weighting
+
+        Returns:
+            Dict with topics, tags, channels lists
+        """
+        # Top topics by discusses edge count
+        topic_result = self.db.query(
+            """
+            SELECT entity_id.name AS name, count() AS cnt
+            FROM content_entity
+            WHERE edge_type = 'discusses'
+                AND entity_id.entity_type = 'topic'
+            GROUP BY name
+            ORDER BY cnt DESC
+            LIMIT $limit
+            """,
+            {"limit": top_n},
+        )
+        topic_items = self._parse_query_result(topic_result)
+        topics = [item["name"] for item in topic_items if item.get("name")]
+
+        # Top tags with recency weighting
+        tag_result = self.db.query(
+            """
+            SELECT tag, count() AS cnt
+            FROM (SELECT array::flatten(tags) AS tag FROM content
+                  WHERE tags != NONE AND created_at > time::now() - $window
+                  UNGROUP)
+            GROUP BY tag
+            ORDER BY cnt DESC
+            LIMIT $limit
+            """,
+            {"limit": top_n, "window": f"{recent_days}d"},
+        )
+        tag_items = self._parse_query_result(tag_result)
+        tags = [item["tag"] for item in tag_items if item.get("tag")]
+
+        # Top YouTube channels by video count
+        channel_result = self.db.query(
+            """
+            SELECT metadata.channel_title AS channel, count() AS cnt
+            FROM content
+            WHERE content_type = 'youtube'
+                AND metadata.channel_title != NONE
+            GROUP BY channel
+            ORDER BY cnt DESC
+            LIMIT $limit
+            """,
+            {"limit": top_n},
+        )
+        channel_items = self._parse_query_result(channel_result)
+        channels = [item["channel"] for item in channel_items if item.get("channel")]
+
+        return {"topics": topics, "tags": tags, "channels": channels}
+
     async def find_potential_duplicates(self, max_distance: int = 1) -> list[list[EntityModel]]:
         """Find potential duplicate entities based on normalized names.
 

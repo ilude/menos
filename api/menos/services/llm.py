@@ -5,8 +5,6 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
-from menos.config import settings
-
 
 @runtime_checkable
 class LLMProvider(Protocol):
@@ -136,9 +134,8 @@ class OllamaLLMProvider:
 LLMService = OllamaLLMProvider
 
 
-def get_llm_service() -> OllamaLLMProvider:
-    """Get LLM service instance for dependency injection."""
-    return OllamaLLMProvider(
-        base_url=settings.ollama_url,
-        model=settings.ollama_summary_model,
-    )
+def get_llm_service() -> LLMProvider:
+    """Get LLM service instance for dependency injection (summary generation)."""
+    from menos.services.di import build_openrouter_chain
+
+    return build_openrouter_chain()

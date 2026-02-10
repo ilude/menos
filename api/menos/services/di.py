@@ -1,5 +1,6 @@
 """Dependency injection container for services."""
 
+import random
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -13,6 +14,7 @@ from menos.services.embeddings import get_embedding_service
 from menos.services.llm import LLMProvider, OllamaLLMProvider
 from menos.services.llm_providers import (
     AnthropicProvider,
+    FallbackProvider,
     NoOpLLMProvider,
     OpenAIProvider,
     OpenRouterProvider,
@@ -85,6 +87,42 @@ async def get_surreal_repo() -> SurrealDBRepository:
     return repo
 
 
+def build_openrouter_chain(model: str = "") -> LLMProvider:
+    """Build an OpenRouter provider with fallback chain.
+
+    If model is specified, returns a plain OpenRouterProvider for that model.
+    If model is empty, returns a FallbackProvider that randomly picks between
+    aurora-alpha and pony-alpha as primary, then falls back to GPT-OSS 120B,
+    then Gemma 3 27B.
+
+    Args:
+        model: Specific model to use, or empty for fallback chain
+
+    Returns:
+        LLMProvider instance (single or fallback chain)
+    """
+    key = settings.openrouter_api_key
+    if not key:
+        raise ValueError("openrouter_api_key must be set for openrouter provider")
+
+    if model:
+        return OpenRouterProvider(key, model)
+
+    # Randomly pick primary between aurora and pony
+    primary_choices = [
+        ("aurora", "openrouter/quasar-alpha"),
+        ("pony", "openrouter/optimus-alpha"),
+    ]
+    primary = random.choice(primary_choices)
+
+    chain = [
+        (primary[0], OpenRouterProvider(key, primary[1])),
+        ("gpt-oss", OpenRouterProvider(key, "openai/gpt-4.1-mini")),
+        ("gemma3", OpenRouterProvider(key, "google/gemma-3-27b-it:free")),
+    ]
+    return FallbackProvider(chain)
+
+
 @lru_cache(maxsize=1)
 def get_expansion_provider() -> LLMProvider:
     """Get singleton expansion LLM provider based on settings.
@@ -114,10 +152,7 @@ def get_expansion_provider() -> LLMProvider:
             raise ValueError(msg)
         return AnthropicProvider(settings.anthropic_api_key, model)
     elif provider_type == "openrouter":
-        if not settings.openrouter_api_key:
-            msg = "openrouter_api_key must be set for openrouter expansion provider"
-            raise ValueError(msg)
-        return OpenRouterProvider(settings.openrouter_api_key, model)
+        return build_openrouter_chain(model)
     elif provider_type == "none":
         return NoOpLLMProvider()
     else:
@@ -154,10 +189,7 @@ def get_synthesis_provider() -> LLMProvider:
             raise ValueError(msg)
         return AnthropicProvider(settings.anthropic_api_key, model)
     elif provider_type == "openrouter":
-        if not settings.openrouter_api_key:
-            msg = "openrouter_api_key must be set for openrouter synthesis provider"
-            raise ValueError(msg)
-        return OpenRouterProvider(settings.openrouter_api_key, model)
+        return build_openrouter_chain(model)
     elif provider_type == "none":
         return NoOpLLMProvider()
     else:
@@ -188,6 +220,53 @@ def get_reranker() -> RerankerProvider:
         return NoOpRerankerProvider()
     else:
         raise ValueError(f"Unknown reranker provider: {provider_type}")
+
+
+@lru_cache(maxsize=1)
+def get_classification_provider() -> LLMProvider:
+    """Get singleton classification LLM provider based on settings.
+
+    Returns:
+        LLMProvider instance configured for classification
+    """
+    provider_type = settings.classification_provider
+    model = settings.classification_model
+
+    if provider_type == "ollama":
+        return OllamaLLMProvider(settings.ollama_url, model)
+    elif provider_type == "openai":
+        if not settings.openai_api_key:
+            raise ValueError("openai_api_key must be set for openai classification provider")
+        return OpenAIProvider(settings.openai_api_key, model)
+    elif provider_type == "anthropic":
+        if not settings.anthropic_api_key:
+            msg = "anthropic_api_key must be set for anthropic classification provider"
+            raise ValueError(msg)
+        return AnthropicProvider(settings.anthropic_api_key, model)
+    elif provider_type == "openrouter":
+        return build_openrouter_chain(model)
+    elif provider_type == "none":
+        return NoOpLLMProvider()
+    else:
+        raise ValueError(f"Unknown classification provider: {provider_type}")
+
+
+async def get_classification_service():
+    """Get ClassificationService instance for dependency injection."""
+    from menos.services.classification import ClassificationService, VaultInterestProvider
+
+    provider = get_classification_provider()
+    repo = await get_surreal_repo()
+    interest_provider = VaultInterestProvider(
+        repo=repo,
+        top_n=settings.classification_interest_top_n,
+    )
+    return ClassificationService(
+        llm_provider=provider,
+        interest_provider=interest_provider,
+        repo=repo,
+        settings=settings,
+    )
 
 
 async def get_agent_service() -> AgentService:
