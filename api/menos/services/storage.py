@@ -257,7 +257,10 @@ class SurrealDBRepository:
             f"content:{content_id}", metadata.model_dump(exclude_none=True)
         )
         if result:
-            return ContentMetadata(**result[0])
+            item = dict(result[0])
+            if "id" in item and hasattr(item["id"], "id"):
+                item["id"] = item["id"].id
+            return ContentMetadata(**item)
         raise RuntimeError(f"Failed to update content {content_id}")
 
     async def delete_content(self, content_id: str) -> None:
@@ -304,7 +307,13 @@ class SurrealDBRepository:
             {"content_id": content_id},
         )
         raw_items = self._parse_query_result(result)
-        return [ChunkModel(**item) for item in raw_items]
+        chunks = []
+        for item in raw_items:
+            item_copy = dict(item)
+            if "id" in item_copy and hasattr(item_copy["id"], "id"):
+                item_copy["id"] = item_copy["id"].id
+            chunks.append(ChunkModel(**item_copy))
+        return chunks
 
     async def delete_chunks(self, content_id: str) -> None:
         """Delete all chunks for content.
@@ -324,30 +333,22 @@ class SurrealDBRepository:
             List of dicts with 'name' and 'count' keys, sorted by count (desc) then name (asc)
         """
         result = self.db.query(
-            "SELECT array::flatten(tags) as tag FROM content WHERE tags != NONE "
-            "GROUP BY tag FETCH tag UNGROUP"
+            "SELECT tag, count() AS count FROM "
+            "(SELECT array::flatten(tags) AS tag FROM content WHERE tags != NONE) "
+            "GROUP BY tag"
         )
 
+        raw_items = self._parse_query_result(result)
+
         tags_data = []
-        if result and isinstance(result, list) and len(result) > 0:
-            # Handle both old format (wrapped in result key) and new format (direct list)
-            if isinstance(result[0], dict) and "result" in result[0]:
-                raw_items = result[0]["result"]
-            else:
-                raw_items = result
+        for item in raw_items:
+            tag = item.get("tag")
+            count = item.get("count", 0)
+            if tag:
+                tags_data.append({"name": tag, "count": count})
 
-            # Count occurrences of each tag and build response
-            tag_counts: dict[str, int] = {}
-            for item in raw_items:
-                if isinstance(item, dict):
-                    tag = item.get("tag")
-                    if tag:
-                        tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-            # Sort by count descending, then by name ascending
-            sorted_tags = sorted(tag_counts.items(), key=lambda x: (-x[1], x[0]))
-
-            tags_data = [{"name": name, "count": count} for name, count in sorted_tags]
+        # Sort by count descending, then by name ascending
+        tags_data.sort(key=lambda x: (-x["count"], x["name"]))
 
         return tags_data
 

@@ -439,9 +439,9 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python"},
-                    {"tag": "api"},
-                    {"tag": "database"},
+                    {"tag": "python", "count": 1},
+                    {"tag": "api", "count": 1},
+                    {"tag": "database", "count": 1},
                 ]
             }
         ]
@@ -461,12 +461,9 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python"},
-                    {"tag": "python"},
-                    {"tag": "api"},
-                    {"tag": "api"},
-                    {"tag": "api"},
-                    {"tag": "database"},
+                    {"tag": "python", "count": 2},
+                    {"tag": "api", "count": 3},
+                    {"tag": "database", "count": 1},
                 ]
             }
         ]
@@ -495,8 +492,8 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         """Test listing tags when query returns list without result key."""
         mock_db = MagicMock()
         mock_db.query.return_value = [
-            {"tag": "python"},
-            {"tag": "api"},
+            {"tag": "python", "count": 1},
+            {"tag": "api", "count": 1},
         ]
 
         repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
@@ -513,14 +510,10 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"tag": "python"},
-                    {"tag": "python"},
-                    {"tag": "python"},
-                    {"tag": "zebra"},
-                    {"tag": "zebra"},
-                    {"tag": "apple"},
-                    {"tag": "apple"},
-                    {"tag": "database"},
+                    {"tag": "python", "count": 3},
+                    {"tag": "zebra", "count": 2},
+                    {"tag": "apple", "count": 2},
+                    {"tag": "database", "count": 1},
                 ]
             }
         ]
