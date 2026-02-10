@@ -180,7 +180,7 @@ class ContentReprocessor:
         if entities_only:
             extraction_status = getattr(item, "entity_extraction_status", None)
             if extraction_status == "completed":
-                logger.info(f"  Entity extraction already completed, skipping")
+                logger.info("  Entity extraction already completed, skipping")
                 self.stats["skipped"] += 1
                 return
 
@@ -212,7 +212,7 @@ class ContentReprocessor:
         # Get content text
         content_text = await self._get_content_text(item)
         if not content_text:
-            logger.info(f"  No content text available for entity extraction")
+            logger.info("  No content text available for entity extraction")
             return
 
         # Get description URLs for YouTube content
@@ -223,7 +223,7 @@ class ContentReprocessor:
         logger.info(f"  Extracting entities from {len(content_text)} chars...")
 
         if dry_run:
-            logger.info(f"  [DRY RUN] Would extract entities from content")
+            logger.info("  [DRY RUN] Would extract entities from content")
             return
 
         try:
@@ -597,9 +597,9 @@ async def main():
         return
 
     # Initialize MinIO client
-    logger.info(f"Connecting to MinIO at {settings.minio_endpoint}")
+    logger.info(f"Connecting to MinIO at {settings.minio_url}")
     minio_client = Minio(
-        settings.minio_endpoint,
+        settings.minio_url,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=settings.minio_secure,

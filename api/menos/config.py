@@ -14,7 +14,13 @@ RerankerProviderType = Literal["rerankers", "llm", "none"]
 class Settings(BaseSettings):
     """Application settings loaded from environment."""
 
-    model_config = ConfigDict(env_file=".env", extra="ignore")
+    model_config = ConfigDict(
+        env_file=[".env", "../.env"],
+        extra="ignore",
+    )
+
+    # Menos API (for client scripts)
+    api_base_url: str = "http://localhost:8000"
 
     # SurrealDB
     surrealdb_url: str = "http://localhost:8000"
@@ -24,7 +30,7 @@ class Settings(BaseSettings):
     surrealdb_database: str = "menos"
 
     # MinIO
-    minio_endpoint: str = "localhost:9000"
+    minio_url: str = "localhost:9000"
     minio_access_key: str = "minio"
     minio_secret_key: str = "minio123"
     minio_secure: bool = False

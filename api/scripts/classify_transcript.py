@@ -2,8 +2,6 @@
 """Classify a YouTube transcript using multiple LLM models."""
 
 import asyncio
-import os
-import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,13 +11,9 @@ from surrealdb import Surreal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from menos.config import settings  # noqa: E402
 from menos.services.llm import OllamaLLMProvider  # noqa: E402
 from menos.services.llm_providers import AnthropicProvider, OpenRouterProvider  # noqa: E402
-
-SURREALDB_URL = "http://192.168.16.241:8080"
-SURREALDB_USER = "root"
-SURREALDB_NS = "menos"
-SURREALDB_DB = "menos"
 
 SYSTEM_PROMPT = """\
 # IDENTITY and PURPOSE
@@ -98,23 +92,6 @@ MODELS = [
 ]
 
 
-def load_env_file() -> None:
-    """Load variables from project .env file if env vars not set."""
-    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = re.match(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
-        if match:
-            name, value = match.groups()
-            value = value.strip("'\"")
-            if name not in os.environ:
-                os.environ[name] = value
-
-
 def parse_results(result):
     """Parse SurrealDB v2 query results into a flat list of dicts."""
     if not result or not isinstance(result, list) or len(result) == 0:
@@ -135,10 +112,10 @@ def parse_results(result):
 
 def get_latest_youtube() -> dict:
     """Fetch the most recent YouTube content record from SurrealDB."""
-    password = os.environ.get("SURREALDB_PASSWORD", "root")
-    db = Surreal(SURREALDB_URL)
-    db.signin({"username": SURREALDB_USER, "password": password})
-    db.use(SURREALDB_NS, SURREALDB_DB)
+    url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
+    db = Surreal(url)
+    db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
+    db.use(settings.surrealdb_namespace, settings.surrealdb_database)
     result = db.query(
         "SELECT * FROM content WHERE content_type = 'youtube' ORDER BY created_at DESC LIMIT 1"
     )
@@ -151,18 +128,13 @@ def get_latest_youtube() -> dict:
 
 def download_transcript(file_path: str) -> str:
     """Download transcript text from MinIO."""
-    endpoint = os.environ.get("MINIO_URL", "http://192.168.16.241:9000")
-    # Strip protocol for Minio client
-    endpoint_host = endpoint.replace("http://", "").replace("https://", "")
-    secure = endpoint.startswith("https://")
-
     client = Minio(
-        endpoint_host,
-        access_key=os.environ.get("MINIO_ACCESS_KEY", "minioadmin"),
-        secret_key=os.environ.get("MINIO_SECRET_KEY", ""),
-        secure=secure,
+        settings.minio_url,
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        secure=settings.minio_secure,
     )
-    bucket = os.environ.get("MINIO_BUCKET", "menos")
+    bucket = settings.minio_bucket
     response = client.get_object(bucket, file_path)
     try:
         return response.read().decode("utf-8")
@@ -174,18 +146,15 @@ def download_transcript(file_path: str) -> str:
 def build_provider(slug: str, provider_type: str, model_id: str):
     """Build an LLM provider instance."""
     if provider_type == "anthropic":
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
+        if not settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
-        return AnthropicProvider(api_key=api_key, model=model_id)
+        return AnthropicProvider(api_key=settings.anthropic_api_key, model=model_id)
     elif provider_type == "openrouter":
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not api_key:
+        if not settings.openrouter_api_key:
             raise RuntimeError("OPENROUTER_API_KEY not set")
-        return OpenRouterProvider(api_key=api_key, model=model_id)
+        return OpenRouterProvider(api_key=settings.openrouter_api_key, model=model_id)
     elif provider_type == "ollama":
-        ollama_url = os.environ.get("OLLAMA_URL", "http://192.168.16.241:11434")
-        return OllamaLLMProvider(base_url=ollama_url, model=model_id)
+        return OllamaLLMProvider(base_url=settings.ollama_url, model=model_id)
     else:
         raise ValueError(f"Unknown provider type: {provider_type}")
 
@@ -240,8 +209,6 @@ timestamp: {timestamp}
 
 
 async def main():
-    load_env_file()
-
     # Step 1: Get latest YouTube content
     print("Fetching latest YouTube content from SurrealDB...")
     record = get_latest_youtube()

@@ -16,7 +16,7 @@ Environment variables (see `api/menos/config.py`):
 | `SURREALDB_DATABASE` | Database name |
 | `SURREALDB_USER` | Database username |
 | `SURREALDB_PASSWORD` | Database password |
-| `MINIO_ENDPOINT` | MinIO server endpoint |
+| `MINIO_URL` | MinIO server endpoint |
 | `MINIO_ACCESS_KEY` | MinIO access key |
 | `MINIO_SECRET_KEY` | MinIO secret key |
 | `MINIO_BUCKET` | MinIO bucket name |

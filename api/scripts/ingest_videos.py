@@ -12,12 +12,14 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from menos.client.signer import RequestSigner
+from menos.config import settings
 from menos.services.youtube import TranscriptSegment, YouTubeService, YouTubeTranscript
 
 
@@ -83,7 +85,7 @@ def main():
     signer = RequestSigner.from_file(key_path)
 
     # API endpoint
-    base_url = "http://192.168.16.241:8000"
+    base_url = settings.api_base_url
 
     # Get transcript API with proxy support
     transcript_api = get_transcript_api()
@@ -129,7 +131,7 @@ def main():
                     "POST",
                     "/api/v1/youtube/upload",
                     body=body_bytes,
-                    host="192.168.16.241:8000",
+                    host=urlparse(settings.api_base_url).netloc,
                 )
                 headers["content-type"] = "application/json"
 

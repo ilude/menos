@@ -36,15 +36,16 @@ async def get_storage_context() -> AsyncGenerator[tuple[MinIOStorage, SurrealDBR
     """
     # Initialize MinIO
     minio_client = Minio(
-        settings.minio_endpoint,
+        settings.minio_url,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=settings.minio_secure,
     )
     minio_storage = MinIOStorage(minio_client, settings.minio_bucket)
 
-    # Initialize SurrealDB
-    db = Surreal(settings.surrealdb_url)
+    # Initialize SurrealDB (blocking HTTP client needs http:// not ws://)
+    surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
+    db = Surreal(surreal_url)
     surreal_repo = SurrealDBRepository(
         db,
         settings.surrealdb_namespace,
@@ -64,7 +65,7 @@ async def get_storage_context() -> AsyncGenerator[tuple[MinIOStorage, SurrealDBR
 async def get_minio_storage() -> MinIOStorage:
     """Get MinIO storage instance for dependency injection."""
     minio_client = Minio(
-        settings.minio_endpoint,
+        settings.minio_url,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=settings.minio_secure,
@@ -74,7 +75,8 @@ async def get_minio_storage() -> MinIOStorage:
 
 async def get_surreal_repo() -> SurrealDBRepository:
     """Get SurrealDB repository instance for dependency injection."""
-    db = Surreal(settings.surrealdb_url)
+    surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
+    db = Surreal(surreal_url)
     repo = SurrealDBRepository(
         db,
         settings.surrealdb_namespace,

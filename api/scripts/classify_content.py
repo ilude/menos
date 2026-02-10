@@ -116,9 +116,9 @@ async def main():
     args = parser.parse_args()
 
     # Initialize MinIO
-    logger.info("Connecting to MinIO at %s", settings.minio_endpoint)
+    logger.info("Connecting to MinIO at %s", settings.minio_url)
     minio_client = Minio(
-        settings.minio_endpoint,
+        settings.minio_url,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=settings.minio_secure,

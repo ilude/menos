@@ -83,7 +83,11 @@ async def refetch_all():
             summary_path = f"youtube/{video_id}/summary.md"
             try:
                 description_text = yt_metadata.description[:1000] if yt_metadata.description else ""
-                links_text = "\n".join(yt_metadata.description_urls[:10]) if yt_metadata.description_urls else "None"
+                links_text = (
+                    "\n".join(yt_metadata.description_urls[:10])
+                    if yt_metadata.description_urls
+                    else "None"
+                )
                 transcript_for_summary = transcript_text[:12000]
 
                 summary_prompt = f"""Summarize this YouTube video:

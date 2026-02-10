@@ -39,7 +39,7 @@ async def check_minio() -> str:
     """Check MinIO connectivity."""
     try:
         client = Minio(
-            settings.minio_endpoint,
+            settings.minio_url,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
             secure=settings.minio_secure,

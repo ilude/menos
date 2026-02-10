@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from menos.services.di import get_storage_context
@@ -38,7 +38,7 @@ def create_frontmatter(
     classification_labels: list[str] | None,
 ) -> str:
     """Create YAML frontmatter for markdown file."""
-    exported_at = datetime.now(timezone.utc).isoformat()
+    exported_at = datetime.now(UTC).isoformat()
 
     frontmatter_dict = {
         "title": title,

@@ -4,18 +4,13 @@
 import argparse
 import asyncio
 import json
-import os
-import re
 import sys
-from pathlib import Path
 
 from surrealdb import Surreal
 
+from menos.config import settings
+
 DANGEROUS_PREFIXES = ("DELETE", "UPDATE", "CREATE", "REMOVE", "DEFINE")
-DEFAULT_DB_URL = "http://192.168.16.241:8080"
-DEFAULT_DB_USER = "root"
-DEFAULT_DB_NS = "menos"
-DEFAULT_DB_NAME = "menos"
 
 
 def parse_results(result):
@@ -76,25 +71,7 @@ def format_table(rows):
     print(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''})")
 
 
-def load_env_file() -> None:
-    """Load variables from project .env file if env vars not set."""
-    # Walk up from script location to find .env
-    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = re.match(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
-        if match:
-            name, value = match.groups()
-            value = value.strip("'\"")
-            if name not in os.environ:
-                os.environ[name] = value
-
-
-async def run_query(query: str, output_json: bool = False, db_url: str = DEFAULT_DB_URL):
+async def run_query(query: str, output_json: bool = False, db_url: str | None = None):
     """Execute a SurrealQL query and print results."""
     # Safety check: reject write operations
     stripped = query.strip().upper()
@@ -103,10 +80,10 @@ async def run_query(query: str, output_json: bool = False, db_url: str = DEFAULT
             print(f"Error: {prefix} queries are not allowed (read-only mode)", file=sys.stderr)
             sys.exit(1)
 
-    password = os.environ.get("SURREALDB_PASSWORD", "root")
-    db = Surreal(db_url)
-    db.signin({"username": DEFAULT_DB_USER, "password": password})
-    db.use(DEFAULT_DB_NS, DEFAULT_DB_NAME)
+    url = db_url or settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
+    db = Surreal(url)
+    db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
+    db.use(settings.surrealdb_namespace, settings.surrealdb_database)
 
     result = db.query(query)
     rows = parse_results(result)
@@ -121,10 +98,9 @@ def main():
     parser = argparse.ArgumentParser(description="Run SurrealQL queries against menos database")
     parser.add_argument("query", help="SurrealQL query string")
     parser.add_argument("--json", action="store_true", dest="output_json", help="Output raw JSON")
-    parser.add_argument("--db-url", default=DEFAULT_DB_URL, help="SurrealDB URL")
+    parser.add_argument("--db-url", default=None, help="SurrealDB URL override")
     args = parser.parse_args()
 
-    load_env_file()
     asyncio.run(run_query(args.query, args.output_json, args.db_url))
 
 
