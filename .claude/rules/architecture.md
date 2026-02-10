@@ -15,7 +15,13 @@ api/
 │   ├── migrate.py           # Migration CLI tool
 │   ├── query.py             # Read-only SurrealQL queries
 │   ├── ingest_videos.py     # YouTube batch ingestion
-│   └── refetch_metadata.py  # Re-fetch YouTube metadata
+│   ├── refetch_metadata.py  # Re-fetch YouTube metadata
+│   ├── fetch_channel_videos.py  # Fetch channel videos to CSV
+│   ├── list_videos.py       # List YouTube videos from SurrealDB
+│   ├── search_videos.py     # Semantic search CLI
+│   ├── delete_video.py      # Delete a video with confirmation
+│   ├── filter_description_urls.py  # Classify description URLs
+│   └── url_filter_status.py # URL filter statistics
 └── menos/
     ├── main.py              # FastAPI app entry point
     ├── config.py            # Pydantic Settings (env-based configuration)
@@ -45,6 +51,7 @@ api/
         ├── reranker.py      # RerankerProvider protocol and implementations
         ├── agent.py         # AgentService (3-stage agentic search)
         ├── migrator.py      # Database migration service
+        ├── url_filter.py    # Heuristic URL classification
         └── di.py            # Dependency injection helpers
 ```
 

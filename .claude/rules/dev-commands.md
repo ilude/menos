@@ -46,4 +46,10 @@ uv run ruff format menos/                        # Format
 PYTHONPATH=. uv run python scripts/ingest_videos.py      # Ingest YouTube videos
 PYTHONPATH=. uv run python scripts/refetch_metadata.py   # Re-fetch YouTube metadata
 PYTHONPATH=. uv run python scripts/query.py "SELECT * FROM content LIMIT 5"  # Ad-hoc queries
+PYTHONPATH=. uv run python scripts/fetch_channel_videos.py URL  # Fetch channel videos to CSV
+PYTHONPATH=. uv run python scripts/list_videos.py               # List YouTube videos
+PYTHONPATH=. uv run python scripts/search_videos.py "query"     # Semantic search
+PYTHONPATH=. uv run python scripts/delete_video.py VIDEO_ID     # Delete a video
+PYTHONPATH=. uv run python scripts/filter_description_urls.py --all  # Classify URLs
+PYTHONPATH=. uv run python scripts/url_filter_status.py         # URL filter stats
 ```
