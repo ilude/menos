@@ -169,6 +169,7 @@ async def ingest_video(
         "author": key_id,
         "created_at": created.created_at.isoformat() if created.created_at else None,
         "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
+        "summary_model": getattr(llm_service, "model", "unknown"),
     }
     metadata_json = json.dumps(metadata_dict, indent=2)
     await minio_storage.upload(

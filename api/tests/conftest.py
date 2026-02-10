@@ -136,6 +136,7 @@ def mock_llm_service():
     """Mock LLM service."""
     service = MagicMock()
     service.generate = AsyncMock(return_value="Test summary")
+    service.model = "test-model"
     return service
 
 
