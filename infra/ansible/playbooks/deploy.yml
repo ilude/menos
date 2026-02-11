@@ -141,6 +141,15 @@
       register: rsync_result
       changed_when: rsync_result.stdout_lines | length > 4
 
+    - name: Sync API migrations directory
+      ansible.builtin.shell: |
+        rsync -av --delete \
+          -e "ssh -o StrictHostKeyChecking=no" \
+          /project/api/migrations/ {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/api/migrations/
+      delegate_to: localhost
+      register: migrations_rsync_result
+      changed_when: migrations_rsync_result.stdout_lines | length > 4
+
     - name: Sync API config files
       ansible.builtin.copy:
         src: "/project/api/{{ item }}"
