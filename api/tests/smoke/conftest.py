@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 import httpx
 import pytest
+from minio import Minio
+from surrealdb import Surreal
 
 from menos.client.signer import RequestSigner
 
@@ -184,6 +186,54 @@ def smoke_first_entity_id(smoke_authed_get):
         pytest.skip("No entities in database")
 
     return items[0]["id"]
+
+
+@pytest.fixture(scope="session")
+def surreal_db(smoke_base_url):
+    """Direct SurrealDB connection, derived from SMOKE_TEST_URL host.
+
+    Uses SMOKE_SURREALDB_PORT (default 8080) and credentials from menos.config.
+    """
+    from menos.config import settings
+
+    parsed = urlparse(smoke_base_url)
+    host = parsed.hostname
+    port = os.environ.get("SMOKE_SURREALDB_PORT", "8080")
+    surreal_url = f"http://{host}:{port}"
+
+    try:
+        db = Surreal(surreal_url)
+        db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
+        db.use(settings.surrealdb_namespace, settings.surrealdb_database)
+        return db
+    except Exception as e:
+        pytest.skip(f"Cannot connect to SurrealDB at {surreal_url}: {e}")
+
+
+@pytest.fixture(scope="session")
+def minio_client(smoke_base_url):
+    """Direct MinIO client, derived from SMOKE_TEST_URL host.
+
+    Uses SMOKE_MINIO_PORT (default 9000) and credentials from menos.config.
+    """
+    from menos.config import settings
+
+    parsed = urlparse(smoke_base_url)
+    host = parsed.hostname
+    port = os.environ.get("SMOKE_MINIO_PORT", "9000")
+    endpoint = f"{host}:{port}"
+
+    try:
+        client = Minio(
+            endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_secure,
+        )
+        client.list_buckets()  # test connectivity
+        return client
+    except Exception as e:
+        pytest.skip(f"Cannot connect to MinIO at {endpoint}: {e}")
 
 
 def pytest_configure(config):

@@ -99,7 +99,10 @@ async def vector_search(
     query_embedding = await embedding_service.embed_query(body.query)
 
     # Build WHERE clause with tag filtering
-    where_clause = "WHERE vector::similarity::cosine(embedding, $embedding) > 0.3"
+    where_clause = (
+        "WHERE embedding != NONE"
+        " AND vector::similarity::cosine(embedding, $embedding) > 0.3"
+    )
     params = {"embedding": query_embedding, "limit": body.limit}
 
     if body.tags:

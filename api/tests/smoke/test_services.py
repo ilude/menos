@@ -1,11 +1,11 @@
 """Smoke tests for production services."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-import httpx
 import pytest
 
 pytestmark = pytest.mark.smoke
@@ -62,32 +62,41 @@ class TestMinIOConnection:
 
 
 class TestAPIConnection:
-    def test_health_endpoint(self, api_base_url):
-        response = httpx.get(f"{api_base_url}/health")
+    def test_health_endpoint(self, smoke_http_client):
+        response = smoke_http_client.get("/health")
         assert response.status_code == 200
 
-    def test_ready_endpoint(self, api_base_url):
-        response = httpx.get(f"{api_base_url}/ready")
+    def test_ready_endpoint(self, smoke_http_client):
+        response = smoke_http_client.get("/ready")
         assert response.status_code == 200
 
-    def test_authenticated_content_list(self, api_base_url, api_signer):
-        path = "/api/v1/content?limit=1"
-        headers = api_signer.sign_request(
-            "GET", path, host="192.168.16.241:8000"
-        )
-        response = httpx.get(f"{api_base_url}{path}", headers=headers)
+    def test_authenticated_content_list(self, smoke_authed_get):
+        response = smoke_authed_get("/api/v1/content?limit=1")
         assert response.status_code == 200
 
 
 class TestQueryScriptEndToEnd:
+    """Tests for query.py script (requires PYTHONPATH and SurrealDB access)."""
+
+    @staticmethod
+    def _script_env() -> dict[str, str]:
+        """Build env with PYTHONPATH set to api/ directory."""
+        api_dir = str(Path(__file__).resolve().parent.parent.parent)
+        return {**os.environ, "PYTHONPATH": api_dir}
+
+    @staticmethod
+    def _api_dir() -> str:
+        return str(Path(__file__).resolve().parent.parent.parent)
+
     def test_select_query_returns_results(self):
         result = subprocess.run(
             [sys.executable, "scripts/query.py", "SELECT * FROM content LIMIT 1"],
             capture_output=True,
             text=True,
-            cwd=str(Path(__file__).resolve().parent.parent.parent),
+            cwd=self._api_dir(),
+            env=self._script_env(),
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
         assert len(result.stdout.strip()) > 0
 
     def test_json_output_is_valid(self):
@@ -100,9 +109,10 @@ class TestQueryScriptEndToEnd:
             ],
             capture_output=True,
             text=True,
-            cwd=str(Path(__file__).resolve().parent.parent.parent),
+            cwd=self._api_dir(),
+            env=self._script_env(),
         )
-        assert result.returncode == 0
+        assert result.returncode == 0, f"stderr: {result.stderr}"
         parsed = json.loads(result.stdout)
         assert isinstance(parsed, list)
 
@@ -111,6 +121,7 @@ class TestQueryScriptEndToEnd:
             [sys.executable, "scripts/query.py", "DELETE FROM content"],
             capture_output=True,
             text=True,
-            cwd=str(Path(__file__).resolve().parent.parent.parent),
+            cwd=self._api_dir(),
+            env=self._script_env(),
         )
         assert result.returncode == 1

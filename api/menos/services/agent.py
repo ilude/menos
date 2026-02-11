@@ -207,7 +207,9 @@ class AgentService:
             SELECT text, content_id,
                    vector::similarity::cosine(embedding, $embedding) AS score
             FROM chunk
-            WHERE vector::similarity::cosine(embedding, $embedding) > 0.3{type_filter}
+            WHERE embedding != NONE
+                AND vector::similarity::cosine(embedding, $embedding) > 0.3
+                {type_filter}
             ORDER BY score DESC
             LIMIT $limit
             """,
