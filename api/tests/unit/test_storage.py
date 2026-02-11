@@ -264,7 +264,7 @@ class TestSurrealDBRepository:
 
         assert result is not None
         assert result.title == "Python Guide"
-        assert result.id == "content:test123"
+        assert result.id == "test123"
 
     @pytest.mark.asyncio
     async def test_find_content_by_title_not_found(self):
@@ -337,23 +337,23 @@ class TestSurrealDBRepository:
     async def test_get_links_by_source(self):
         """Test getting all links from a source."""
         mock_db = MagicMock()
-        mock_record_id = MagicMock()
+        mock_record_id = MagicMock(spec=["id"])
         mock_record_id.id = "content:source123"
-        mock_target_id = MagicMock()
+        mock_target_id = MagicMock(spec=["id"])
         mock_target_id.id = "content:target456"
 
         mock_db.query.return_value = [
             {
                 "result": [
                     {
-                        "id": MagicMock(id="link:1"),
+                        "id": MagicMock(spec=["id"], id="link:1"),
                         "source": mock_record_id,
                         "target": mock_target_id,
                         "link_text": "Link 1",
                         "link_type": "wiki",
                     },
                     {
-                        "id": MagicMock(id="link:2"),
+                        "id": MagicMock(spec=["id"], id="link:2"),
                         "source": mock_record_id,
                         "target": None,
                         "link_text": "Link 2",
@@ -376,24 +376,24 @@ class TestSurrealDBRepository:
     async def test_get_links_by_target(self):
         """Test getting all links pointing to a target (backlinks)."""
         mock_db = MagicMock()
-        mock_source_id = MagicMock()
+        mock_source_id = MagicMock(spec=["id"])
         mock_source_id.id = "content:source123"
-        mock_target_id = MagicMock()
+        mock_target_id = MagicMock(spec=["id"])
         mock_target_id.id = "content:target456"
 
         mock_db.query.return_value = [
             {
                 "result": [
                     {
-                        "id": MagicMock(id="link:1"),
+                        "id": MagicMock(spec=["id"], id="link:1"),
                         "source": mock_source_id,
                         "target": mock_target_id,
                         "link_text": "Target Doc",
                         "link_type": "wiki",
                     },
                     {
-                        "id": MagicMock(id="link:2"),
-                        "source": MagicMock(id="content:source789"),
+                        "id": MagicMock(spec=["id"], id="link:2"),
+                        "source": MagicMock(spec=["id"], id="content:source789"),
                         "target": mock_target_id,
                         "link_text": "Another Link",
                         "link_type": "markdown",
@@ -433,11 +433,11 @@ class TestSurrealDBRepository:
         mock_db = MagicMock()
 
         # Simulate RecordID objects
-        mock_source_id = MagicMock()
+        mock_source_id = MagicMock(spec=["id"])
         mock_source_id.id = "content:source123"
-        mock_target_id = MagicMock()
+        mock_target_id = MagicMock(spec=["id"])
         mock_target_id.id = "content:target456"
-        mock_link_id = MagicMock()
+        mock_link_id = MagicMock(spec=["id"])
         mock_link_id.id = "link:abc"
 
         mock_db.query.return_value = [
@@ -636,7 +636,7 @@ class TestListContentFilters:
 
     @pytest.mark.asyncio
     async def test_list_content_with_record_id_objects(self):
-        mock_id = MagicMock()
+        mock_id = MagicMock(spec=["id"])
         mock_id.id = "abc123"
         mock_db = MagicMock()
         mock_db.query.return_value = [
@@ -819,7 +819,7 @@ class TestFindContentByTitleRecordID:
 
     @pytest.mark.asyncio
     async def test_find_content_by_title_with_record_id(self):
-        mock_id = MagicMock()
+        mock_id = MagicMock(spec=["id"])
         mock_id.id = "abc123"
         mock_db = MagicMock()
         mock_db.query.return_value = [
@@ -844,8 +844,8 @@ class TestFindContentByTitleRecordID:
         assert result.id == "abc123"
 
 
-class TestExtractEntityId:
-    """Tests for _extract_entity_id helper."""
+class TestStringifyRecordId:
+    """Tests for _stringify_record_id helper."""
 
     def _make_repo(self):
         return SurrealDBRepository(MagicMock(), "ns", "db")
@@ -854,21 +854,21 @@ class TestExtractEntityId:
         repo = self._make_repo()
         mock_rid = MagicMock(spec=["record_id"])
         mock_rid.record_id = "abc123"
-        assert repo._extract_entity_id(mock_rid) == "abc123"
+        assert repo._stringify_record_id(mock_rid) == "abc123"
 
     def test_with_id_attribute(self):
         repo = self._make_repo()
         mock_rid = MagicMock(spec=["id"])
         mock_rid.id = "def456"
-        assert repo._extract_entity_id(mock_rid) == "def456"
+        assert repo._stringify_record_id(mock_rid) == "def456"
 
     def test_with_string(self):
         repo = self._make_repo()
-        assert repo._extract_entity_id("entity:ghi789") == "ghi789"
+        assert repo._stringify_record_id("entity:ghi789") == "ghi789"
 
     def test_with_plain_string(self):
         repo = self._make_repo()
-        assert repo._extract_entity_id("simple") == "simple"
+        assert repo._stringify_record_id("simple") == "simple"
 
 
 class TestParseEntity:
@@ -922,9 +922,9 @@ class TestParseContentEntityEdge:
 
     def test_parse_edge_with_record_id_objects(self):
         repo = self._make_repo()
-        mock_cid = MagicMock()
+        mock_cid = MagicMock(spec=["id"])
         mock_cid.id = "content_abc"
-        mock_eid = MagicMock()
+        mock_eid = MagicMock(spec=["id"])
         mock_eid.id = "entity_xyz"
         edge = repo._parse_content_entity_edge({
             "id": "content_entity:edge1",
@@ -1370,7 +1370,7 @@ class TestGetContentForEntity:
 
     @pytest.mark.asyncio
     async def test_with_record_id_in_content(self):
-        mock_cid = MagicMock()
+        mock_cid = MagicMock(spec=["id"])
         mock_cid.id = "c1"
         mock_db = MagicMock()
         mock_db.query.return_value = [
@@ -1877,13 +1877,13 @@ class TestGetGraphData:
 
     @pytest.mark.asyncio
     async def test_graph_data_with_record_id_objects(self):
-        mock_src = MagicMock()
+        mock_src = MagicMock(spec=["id"])
         mock_src.id = "c1"
-        mock_tgt = MagicMock()
+        mock_tgt = MagicMock(spec=["id"])
         mock_tgt.id = "c2"
-        mock_nid1 = MagicMock()
+        mock_nid1 = MagicMock(spec=["id"])
         mock_nid1.id = "c1"
-        mock_nid2 = MagicMock()
+        mock_nid2 = MagicMock(spec=["id"])
         mock_nid2.id = "c2"
 
         mock_db = MagicMock()
@@ -1912,7 +1912,7 @@ class TestGetGraphData:
                 {
                     "result": [
                         {
-                            "id": MagicMock(id="l1"),
+                            "id": MagicMock(spec=["id"], id="l1"),
                             "source": mock_src,
                             "target": mock_tgt,
                             "link_text": "Link",

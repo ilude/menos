@@ -165,14 +165,8 @@ class SurrealDBRepository:
 
         result = self.db.create("content", metadata.model_dump(exclude_none=True))
         if result:
-            # Handle both dict (new) and list (old) return types
             record = result[0] if isinstance(result, list) else result
-            record_id = record["id"]
-            # Handle RecordID object or string
-            if hasattr(record_id, "record_id"):
-                metadata.id = str(record_id.record_id)
-            else:
-                metadata.id = str(record_id).split(":")[-1]
+            metadata.id = self._stringify_record_id(record["id"])
         return metadata
 
     async def get_content(self, content_id: str) -> ContentMetadata | None:
@@ -186,10 +180,7 @@ class SurrealDBRepository:
         """
         result = self.db.select(f"content:{content_id}")
         if result:
-            item = dict(result[0])
-            if "id" in item and hasattr(item["id"], "id"):
-                item["id"] = item["id"].id
-            return ContentMetadata(**item)
+            return self._parse_content(result[0])
         return None
 
     async def list_content(
@@ -228,15 +219,8 @@ class SurrealDBRepository:
             f"SELECT * FROM content{where_clause} LIMIT $limit START $offset",
             params,
         )
-        # Use the helper
         raw_items = self._parse_query_result(result)
-        # Convert RecordID objects to strings
-        items = []
-        for item in raw_items:
-            item_copy = dict(item)
-            if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                item_copy["id"] = item_copy["id"].id
-            items.append(ContentMetadata(**item_copy))
+        items = [self._parse_content(item) for item in raw_items]
         return items, len(items)
 
     async def update_content(self, content_id: str, metadata: ContentMetadata) -> ContentMetadata:
@@ -257,10 +241,7 @@ class SurrealDBRepository:
             f"content:{content_id}", metadata.model_dump(exclude_none=True)
         )
         if result:
-            item = dict(result[0])
-            if "id" in item and hasattr(item["id"], "id"):
-                item["id"] = item["id"].id
-            return ContentMetadata(**item)
+            return self._parse_content(result[0])
         raise RuntimeError(f"Failed to update content {content_id}")
 
     async def delete_content(self, content_id: str) -> None:
@@ -283,14 +264,8 @@ class SurrealDBRepository:
         chunk.created_at = datetime.now(UTC)
         result = self.db.create("chunk", chunk.model_dump(exclude_none=True))
         if result:
-            # Handle both dict (new) and list (old) return types
             record = result[0] if isinstance(result, list) else result
-            record_id = record["id"]
-            # Handle RecordID object or string
-            if hasattr(record_id, "record_id"):
-                chunk.id = str(record_id.record_id)
-            else:
-                chunk.id = str(record_id).split(":")[-1]
+            chunk.id = self._stringify_record_id(record["id"])
         return chunk
 
     async def get_chunks(self, content_id: str) -> list[ChunkModel]:
@@ -307,13 +282,7 @@ class SurrealDBRepository:
             {"content_id": content_id},
         )
         raw_items = self._parse_query_result(result)
-        chunks = []
-        for item in raw_items:
-            item_copy = dict(item)
-            if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                item_copy["id"] = item_copy["id"].id
-            chunks.append(ChunkModel(**item_copy))
-        return chunks
+        return [self._parse_chunk(item) for item in raw_items]
 
     async def delete_chunks(self, content_id: str) -> None:
         """Delete all chunks for content.
@@ -367,10 +336,7 @@ class SurrealDBRepository:
         raw_items = self._parse_query_result(result)
 
         if raw_items:
-            item = dict(raw_items[0])
-            if "id" in item and hasattr(item["id"], "id"):
-                item["id"] = item["id"].id
-            return ContentMetadata(**item)
+            return self._parse_content(raw_items[0])
         return None
 
     async def create_link(self, link: LinkModel) -> LinkModel:
@@ -393,11 +359,7 @@ class SurrealDBRepository:
         result = self.db.create("link", link_data)
         if result:
             record = result[0] if isinstance(result, list) else result
-            record_id = record["id"]
-            if hasattr(record_id, "record_id"):
-                link.id = str(record_id.record_id)
-            else:
-                link.id = str(record_id).split(":")[-1]
+            link.id = self._stringify_record_id(record["id"])
         return link
 
     async def delete_links_by_source(self, content_id: str) -> None:
@@ -426,28 +388,7 @@ class SurrealDBRepository:
         )
         raw_items = self._parse_query_result(result)
 
-        links = []
-        for item in raw_items:
-            item_copy = dict(item)
-            # Convert record references to simple IDs
-            if "source" in item_copy:
-                source_val = item_copy["source"]
-                item_copy["source"] = (
-                    source_val.id
-                    if hasattr(source_val, "id")
-                    else str(source_val).split(":")[-1]
-                )
-            if "target" in item_copy and item_copy["target"]:
-                target_val = item_copy["target"]
-                item_copy["target"] = (
-                    target_val.id
-                    if hasattr(target_val, "id")
-                    else str(target_val).split(":")[-1]
-                )
-            if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                item_copy["id"] = item_copy["id"].id
-            links.append(LinkModel(**item_copy))
-        return links
+        return [self._parse_link(item) for item in raw_items]
 
     async def get_links_by_target(self, content_id: str) -> list[LinkModel]:
         """Get all links pointing to a content item (backlinks).
@@ -463,29 +404,7 @@ class SurrealDBRepository:
             {"target": f"content:{content_id}"},
         )
         raw_items = self._parse_query_result(result)
-
-        links = []
-        for item in raw_items:
-            item_copy = dict(item)
-            # Convert record references to simple IDs
-            if "source" in item_copy:
-                source_val = item_copy["source"]
-                item_copy["source"] = (
-                    source_val.id
-                    if hasattr(source_val, "id")
-                    else str(source_val).split(":")[-1]
-                )
-            if "target" in item_copy and item_copy["target"]:
-                target_val = item_copy["target"]
-                item_copy["target"] = (
-                    target_val.id
-                    if hasattr(target_val, "id")
-                    else str(target_val).split(":")[-1]
-                )
-            if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                item_copy["id"] = item_copy["id"].id
-            links.append(LinkModel(**item_copy))
-        return links
+        return [self._parse_link(item) for item in raw_items]
 
     async def get_graph_data(
         self,
@@ -528,10 +447,7 @@ class SurrealDBRepository:
 
         raw_items = self._parse_query_result(content_result)
         for item in raw_items:
-            item_copy = dict(item)
-            if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                item_copy["id"] = item_copy["id"].id
-            node = ContentMetadata(**item_copy)
+            node = self._parse_content(item)
             if node.id:
                 nodes.append(node)
                 node_ids.add(node.id)
@@ -548,36 +464,11 @@ class SurrealDBRepository:
 
             raw_links = self._parse_query_result(link_result)
             for item in raw_links:
-                item_copy = dict(item)
-                # Convert record references to simple IDs
-                if "source" in item_copy:
-                    source_val = item_copy["source"]
-                    source_id = (
-                        source_val.id
-                        if hasattr(source_val, "id")
-                        else str(source_val).split(":")[-1]
-                    )
-                    item_copy["source"] = source_id
-                else:
+                if "source" not in item:
                     continue
-
-                if "target" in item_copy and item_copy["target"]:
-                    target_val = item_copy["target"]
-                    target_id = (
-                        target_val.id
-                        if hasattr(target_val, "id")
-                        else str(target_val).split(":")[-1]
-                    )
-                    item_copy["target"] = target_id
-                else:
-                    item_copy["target"] = None
-
-                if "id" in item_copy and hasattr(item_copy["id"], "id"):
-                    item_copy["id"] = item_copy["id"].id
-
+                link = self._parse_link(item)
                 # Only include links where both source and target are in node set
                 # (or target is None for unresolved links)
-                link = LinkModel(**item_copy)
                 if link.source in node_ids and (
                     link.target is None or link.target in node_ids
                 ):
@@ -648,35 +539,58 @@ class SurrealDBRepository:
 
         return nodes, edges
 
-    # ==================== Entity Methods ====================
+    # ==================== Record Parsing Helpers ====================
 
-    def _extract_entity_id(self, record_id) -> str:
-        """Extract entity ID string from SurrealDB record ID."""
-        if hasattr(record_id, "record_id"):
-            return str(record_id.record_id)
-        elif hasattr(record_id, "id"):
-            return str(record_id.id)
+    def _stringify_record_id(self, value) -> str:
+        """Convert a SurrealDB RecordID to a plain string ID.
+
+        Handles three forms returned by the surrealdb Python client:
+        - RecordID with .record_id (from create methods)
+        - RecordID with .id (from select/query methods)
+        - Plain string fallback (split on colon)
+        """
+        if hasattr(value, "record_id"):
+            return str(value.record_id)
+        elif hasattr(value, "id"):
+            return str(value.id)
         else:
-            return str(record_id).split(":")[-1]
+            return str(value).split(":")[-1]
+
+    def _parse_content(self, item: dict) -> ContentMetadata:
+        """Parse a raw content record into ContentMetadata."""
+        item_copy = dict(item)
+        if "id" in item_copy:
+            item_copy["id"] = self._stringify_record_id(item_copy["id"])
+        return ContentMetadata(**item_copy)
+
+    def _parse_chunk(self, item: dict) -> ChunkModel:
+        """Parse a raw chunk record into ChunkModel."""
+        item_copy = dict(item)
+        if "id" in item_copy:
+            item_copy["id"] = self._stringify_record_id(item_copy["id"])
+        return ChunkModel(**item_copy)
+
+    def _parse_link(self, item: dict) -> LinkModel:
+        """Parse a raw link record into LinkModel."""
+        item_copy = dict(item)
+        for field in ("id", "source", "target"):
+            if field in item_copy and item_copy[field] is not None:
+                item_copy[field] = self._stringify_record_id(item_copy[field])
+        return LinkModel(**item_copy)
 
     def _parse_entity(self, item: dict) -> EntityModel:
         """Parse a raw entity record into EntityModel."""
         item_copy = dict(item)
         if "id" in item_copy:
-            item_copy["id"] = self._extract_entity_id(item_copy["id"])
+            item_copy["id"] = self._stringify_record_id(item_copy["id"])
         return EntityModel(**item_copy)
 
     def _parse_content_entity_edge(self, item: dict) -> ContentEntityEdge:
         """Parse a raw content_entity record into ContentEntityEdge."""
         item_copy = dict(item)
-        if "id" in item_copy:
-            item_copy["id"] = self._extract_entity_id(item_copy["id"])
-        if "content_id" in item_copy:
-            cid = item_copy["content_id"]
-            item_copy["content_id"] = cid.id if hasattr(cid, "id") else str(cid).split(":")[-1]
-        if "entity_id" in item_copy:
-            eid = item_copy["entity_id"]
-            item_copy["entity_id"] = eid.id if hasattr(eid, "id") else str(eid).split(":")[-1]
+        for field in ("id", "content_id", "entity_id"):
+            if field in item_copy and item_copy[field] is not None:
+                item_copy[field] = self._stringify_record_id(item_copy[field])
         return ContentEntityEdge(**item_copy)
 
     async def create_entity(self, entity: EntityModel) -> EntityModel:
@@ -699,7 +613,7 @@ class SurrealDBRepository:
         result = self.db.create("entity", entity.model_dump(exclude_none=True, mode="json"))
         if result:
             record = result[0] if isinstance(result, list) else result
-            entity.id = self._extract_entity_id(record["id"])
+            entity.id = self._stringify_record_id(record["id"])
         return entity
 
     async def get_entity(self, entity_id: str) -> EntityModel | None:
@@ -856,7 +770,7 @@ class SurrealDBRepository:
         result = self.db.create("content_entity", edge_data)
         if result:
             record = result[0] if isinstance(result, list) else result
-            edge.id = self._extract_entity_id(record["id"])
+            edge.id = self._stringify_record_id(record["id"])
         return edge
 
     async def get_entities_for_content(
@@ -919,10 +833,7 @@ class SurrealDBRepository:
         for item in raw_items:
             content_data = item.pop("content", None)
             if content_data:
-                # Parse content
-                if "id" in content_data and hasattr(content_data["id"], "id"):
-                    content_data["id"] = content_data["id"].id
-                content = ContentMetadata(**content_data)
+                content = self._parse_content(content_data)
                 edge = self._parse_content_entity_edge(item)
                 content_with_edges.append((content, edge))
         return content_with_edges

@@ -14,3 +14,6 @@ Changes to `infra/ansible/Dockerfile` require explicit rebuild: `docker compose 
 
 ## Mock side_effect for Paginated Loops
 A while loop calling a paginated method needs N+1 mock `side_effect` entries — N for data batches plus 1 empty return `([], total)` to break the loop. Missing the terminator causes `StopIteration`.
+
+## SurrealDB RecordID Objects
+The surrealdb Python client returns `RecordID` objects (not strings) for `id`, `source`, `target`, and other reference fields. Always convert before passing to Pydantic models. Use the `_stringify_record_id()`, `_parse_content()`, `_parse_chunk()`, `_parse_link()`, or `_parse_entity()` helpers in `storage.py`. Unit tests with mocked DB won't catch this — smoke tests against the live API are the safety net.
