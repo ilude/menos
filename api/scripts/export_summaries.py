@@ -104,9 +104,7 @@ async def export_summaries(
             ]
 
         if not items:
-            logger.warning(
-                f"No YouTube videos found{f' with ID {video_id}' if video_id else ''}"
-            )
+            logger.warning(f"No YouTube videos found{f' with ID {video_id}' if video_id else ''}")
             return
 
         logger.info(f"Exporting {len(items)} video summaries to {output_dir}\n")
@@ -118,9 +116,7 @@ async def export_summaries(
                 continue
 
             title = item.title or f"YouTube: {video_id}"
-            channel = (
-                item.metadata.get("channel_title") if item.metadata else None
-            )
+            channel = item.metadata.get("channel_title") if item.metadata else None
             summary_model = None
 
             # Read metadata.json from MinIO (has summary_model, channel, and real title)
@@ -155,7 +151,8 @@ async def export_summaries(
 
             try:
                 raw = surreal.db.query(
-                    "SELECT classification_status, classification_tier, "
+                    "SELECT processing_status, metadata.unified_result AS unified_result, "
+                    "classification_status, classification_tier, "
                     "classification_score, metadata.classification.labels AS labels "
                     "FROM content WHERE id = $id",
                     {"id": item.id},
@@ -163,7 +160,14 @@ async def export_summaries(
                 parsed = surreal._parse_query_result(raw)
                 if parsed:
                     rec = parsed[0]
-                    if rec.get("classification_status") == "completed":
+                    # Try unified result first (new pipeline)
+                    unified = rec.get("unified_result")
+                    if rec.get("processing_status") == "completed" and unified:
+                        classification_tier = unified.get("tier")
+                        classification_score = unified.get("quality_score")
+                        classification_labels = unified.get("tags")
+                    # Fall back to legacy classification
+                    elif rec.get("classification_status") == "completed":
                         classification_tier = rec.get("classification_tier")
                         classification_score = rec.get("classification_score")
                         classification_labels = rec.get("labels")

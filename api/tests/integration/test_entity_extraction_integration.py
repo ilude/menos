@@ -1,16 +1,15 @@
-"""Integration tests for entity extraction wiring into ingest routes."""
+"""Integration tests for pipeline orchestrator wiring into ingest routes."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-from menos.models import ContentMetadata
-from menos.services.entity_resolution import ResolutionResult
+from menos.models import ContentMetadata, PipelineJob
 
 
-class TestYouTubeEntityResolutionIntegration:
-    """End-to-end mock test verifying full entity extraction call chain."""
+class TestYouTubeIngestPipelineIntegration:
+    """End-to-end mock test verifying ingest calls pipeline orchestrator."""
 
-    def test_ingest_video_calls_entity_resolution_process_content(
+    def test_ingest_video_submits_to_pipeline_orchestrator(
         self,
         authed_client,
         mock_surreal_repo,
@@ -18,10 +17,9 @@ class TestYouTubeEntityResolutionIntegration:
         mock_metadata_service,
         mock_minio_storage,
         mock_embedding_service,
-        mock_classification_service,
-        monkeypatch,
+        mock_pipeline_orchestrator,
     ):
-        """Full chain: ingest -> background task -> process_content called with correct args."""
+        """Full chain: ingest -> orchestrator.submit called with correct args."""
         from menos.services.youtube_metadata import YouTubeMetadata
 
         mock_transcript = MagicMock()
@@ -67,26 +65,13 @@ class TestYouTubeEntityResolutionIntegration:
             created_at=datetime.now(UTC),
         )
         mock_surreal_repo.create_content = AsyncMock(return_value=created_content)
-        mock_surreal_repo.update_content_extraction_status = AsyncMock()
 
-        mock_resolution_svc = MagicMock()
-        mock_resolution_svc.process_content = AsyncMock(
-            return_value=ResolutionResult(
-                edges=[],
-                entities_created=3,
-                entities_reused=1,
-                metrics=None,
-            )
+        submitted_job = PipelineJob(
+            id="pipeline-job-1",
+            resource_key="yt:integration_vid",
+            content_id="int_content1",
         )
-
-        from menos.main import app
-        from menos.services.di import get_entity_resolution_service
-
-        app.dependency_overrides[get_entity_resolution_service] = lambda: mock_resolution_svc
-
-        monkeypatch.setattr(
-            "menos.routers.youtube.settings", MagicMock(entity_extraction_enabled=True)
-        )
+        mock_pipeline_orchestrator.submit = AsyncMock(return_value=submitted_job)
 
         response = authed_client.post(
             "/api/v1/youtube/ingest",
@@ -96,5 +81,13 @@ class TestYouTubeEntityResolutionIntegration:
         assert response.status_code == 200
         data = response.json()
         assert data["video_id"] == "integration_vid"
+        assert data["job_id"] == "pipeline-job-1"
 
-        app.dependency_overrides.pop(get_entity_resolution_service, None)
+        # Verify orchestrator was called with correct args
+        mock_pipeline_orchestrator.submit.assert_called_once_with(
+            "int_content1",
+            mock_transcript.full_text,
+            "youtube",
+            "RAG Tutorial",
+            "yt:integration_vid",
+        )

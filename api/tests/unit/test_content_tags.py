@@ -12,20 +12,18 @@ from menos.services.storage import MinIOStorage, SurrealDBRepository
 
 
 @pytest.fixture
-def mock_classification_svc():
-    """Mock classification service for content creation tests."""
-    svc = MagicMock()
-    svc.classify_content = AsyncMock(return_value=None)
-    svc.settings = MagicMock()
-    svc.settings.classification_min_content_length = 500
-    return svc
+def mock_orchestrator():
+    """Mock pipeline orchestrator for content creation tests."""
+    orch = MagicMock()
+    orch.submit = AsyncMock(return_value=None)
+    return orch
 
 
 class TestContentTagsParameter:
     """Tests for content tags parameter in POST /api/v1/content endpoint."""
 
     @pytest.mark.asyncio
-    async def test_create_content_with_tags(self, mock_classification_svc):
+    async def test_create_content_with_tags(self, mock_orchestrator):
         """Test creating content with tags stored in metadata."""
         mock_minio = MagicMock(spec=MinIOStorage)
         mock_minio.upload = AsyncMock(return_value=100)
@@ -62,7 +60,7 @@ class TestContentTagsParameter:
             tags=["important", "review", "urgent"],
             minio_storage=mock_minio,
             surreal_repo=mock_repo,
-            classification_service=mock_classification_svc,
+            orchestrator=mock_orchestrator,
         )
 
         # Verify the result
@@ -80,7 +78,7 @@ class TestContentTagsParameter:
         assert metadata.tags == ["important", "review", "urgent"]
 
     @pytest.mark.asyncio
-    async def test_create_content_without_tags(self, mock_classification_svc):
+    async def test_create_content_without_tags(self, mock_orchestrator):
         """Test creating content without tags defaults to empty list."""
         mock_minio = MagicMock(spec=MinIOStorage)
         mock_minio.upload = AsyncMock(return_value=100)
@@ -117,7 +115,7 @@ class TestContentTagsParameter:
             tags=None,
             minio_storage=mock_minio,
             surreal_repo=mock_repo,
-            classification_service=mock_classification_svc,
+            orchestrator=mock_orchestrator,
         )
 
         # Verify the result
@@ -131,7 +129,7 @@ class TestContentTagsParameter:
         assert metadata.tags == []
 
     @pytest.mark.asyncio
-    async def test_create_content_with_empty_tags_list(self, mock_classification_svc):
+    async def test_create_content_with_empty_tags_list(self, mock_orchestrator):
         """Test creating content with empty tags list."""
         mock_minio = MagicMock(spec=MinIOStorage)
         mock_minio.upload = AsyncMock(return_value=100)
@@ -168,7 +166,7 @@ class TestContentTagsParameter:
             tags=[],
             minio_storage=mock_minio,
             surreal_repo=mock_repo,
-            classification_service=mock_classification_svc,
+            orchestrator=mock_orchestrator,
         )
 
         # Verify the result
@@ -180,6 +178,7 @@ class TestContentTagsParameter:
         assert call_args is not None
         metadata = call_args[0][0]
         assert metadata.tags == []
+
 
 class TestContentUpdateEndpoint:
     """Tests for PATCH /api/v1/content/{id} endpoint."""
@@ -218,6 +217,7 @@ class TestContentUpdateEndpoint:
         mock_repo.update_content = AsyncMock(return_value=updated_metadata)
 
         from menos.routers.content import ContentUpdateRequest
+
         update_request = ContentUpdateRequest(tags=["new-tag1", "new-tag2"])
 
         result = await update_content(
@@ -241,6 +241,7 @@ class TestContentUpdateEndpoint:
         mock_repo.get_content = AsyncMock(return_value=None)
 
         from menos.routers.content import ContentUpdateRequest
+
         update_request = ContentUpdateRequest(tags=["new-tag"])
 
         result = await update_content(
@@ -289,6 +290,7 @@ class TestContentUpdateEndpoint:
         mock_repo.update_content = AsyncMock(return_value=updated_metadata)
 
         from menos.routers.content import ContentUpdateRequest
+
         update_request = ContentUpdateRequest(
             title="new-title",
             description="new description",
@@ -342,6 +344,7 @@ class TestContentUpdateEndpoint:
         mock_repo.update_content = AsyncMock(return_value=updated_metadata)
 
         from menos.routers.content import ContentUpdateRequest
+
         update_request = ContentUpdateRequest(tags=["new-tag"])
 
         result = await update_content(

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Batch classify existing content with quality ratings and labels.
+"""Batch process existing content through the unified pipeline.
 
 Run with: PYTHONPATH=. uv run python scripts/classify_content.py
 Use --dry-run to preview changes without applying them.
-Use --force to reclassify already-classified content.
+Use --force to reprocess already-processed content.
 Use --content-type to filter by content type (e.g., youtube, markdown).
 Use --limit to cap the total number of items to process.
 """
@@ -17,15 +17,9 @@ from minio import Minio
 from surrealdb import Surreal
 
 from menos.config import settings
-from menos.services.classification import ClassificationService, VaultInterestProvider
-from menos.services.di import build_openrouter_chain
-from menos.services.llm import OllamaLLMProvider
-from menos.services.llm_providers import (
-    AnthropicProvider,
-    NoOpLLMProvider,
-    OpenAIProvider,
-)
+from menos.services.di import get_unified_pipeline_provider
 from menos.services.storage import MinIOStorage, SurrealDBRepository
+from menos.services.unified_pipeline import UnifiedPipelineService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,53 +28,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _create_classification_service(
+def _create_pipeline_service(
     surreal_repo: SurrealDBRepository,
-) -> ClassificationService | None:
-    """Create classification service with all dependencies.
+) -> UnifiedPipelineService | None:
+    """Create unified pipeline service with all dependencies.
 
     Args:
         surreal_repo: SurrealDB repository
 
     Returns:
-        ClassificationService or None if dependencies unavailable
+        UnifiedPipelineService or None if dependencies unavailable
     """
-    if not settings.classification_enabled:
-        logger.info("Classification disabled in settings")
+    if not settings.unified_pipeline_enabled:
+        logger.info("Unified pipeline disabled in settings")
         return None
 
-    provider_type = settings.classification_provider
-    model = settings.classification_model
-
     try:
-        if provider_type == "ollama":
-            llm_provider = OllamaLLMProvider(settings.ollama_url, model)
-        elif provider_type == "openai":
-            if not settings.openai_api_key:
-                raise ValueError("openai_api_key must be set")
-            llm_provider = OpenAIProvider(settings.openai_api_key, model)
-        elif provider_type == "anthropic":
-            if not settings.anthropic_api_key:
-                raise ValueError("anthropic_api_key must be set")
-            llm_provider = AnthropicProvider(settings.anthropic_api_key, model)
-        elif provider_type == "openrouter":
-            llm_provider = build_openrouter_chain(model)
-        elif provider_type == "none":
-            llm_provider = NoOpLLMProvider()
-        else:
-            raise ValueError(f"Unknown provider: {provider_type}")
+        provider = get_unified_pipeline_provider()
     except Exception as e:
         logger.error("Failed to create LLM provider: %s", e)
         return None
 
-    interest_provider = VaultInterestProvider(
-        repo=surreal_repo,
-        top_n=settings.classification_interest_top_n,
-    )
-
-    return ClassificationService(
-        llm_provider=llm_provider,
-        interest_provider=interest_provider,
+    return UnifiedPipelineService(
+        llm_provider=provider,
         repo=surreal_repo,
         settings=settings,
     )
@@ -89,7 +59,7 @@ def _create_classification_service(
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Batch classify content with quality ratings and labels"
+        description="Batch process content through the unified pipeline"
     )
     parser.add_argument(
         "--dry-run",
@@ -99,7 +69,7 @@ async def main():
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Reclassify already-classified content",
+        help="Reprocess already-processed content",
     )
     parser.add_argument(
         "--content-type",
@@ -143,27 +113,14 @@ async def main():
         logger.error("Failed to connect to SurrealDB: %s", e)
         return
 
-    # Create classification service
-    classification_service = _create_classification_service(surreal_repo)
-    if not classification_service:
-        logger.error("Classification service not available")
+    # Create pipeline service
+    pipeline_service = _create_pipeline_service(surreal_repo)
+    if not pipeline_service:
+        logger.error("Pipeline service not available")
         return
 
-    # Pre-cache interest profile once
-    logger.info("Caching interest profile...")
-    try:
-        interests = await classification_service.interest_provider.get_interests()
-        logger.info(
-            "Interest profile: %d topics, %d tags, %d channels",
-            len(interests.get("topics", [])),
-            len(interests.get("tags", [])),
-            len(interests.get("channels", [])),
-        )
-    except Exception as e:
-        logger.warning("Failed to cache interest profile: %s", e)
-
     # Process content in batches
-    stats = {"total": 0, "classified": 0, "skipped": 0, "failed": 0}
+    stats = {"total": 0, "processed": 0, "skipped": 0, "failed": 0}
     start_time = datetime.now()
     offset = 0
     batch_size = 20
@@ -195,11 +152,17 @@ async def main():
                 stats["skipped"] += 1
                 continue
 
-            # Skip already classified unless --force
-            if not args.force and item.metadata.get("classification"):
-                logger.info("  Skipping %s (already classified)", content_id)
-                stats["skipped"] += 1
-                continue
+            # Check if already processed (unless --force)
+            if not args.force:
+                raw = surreal_repo.db.query(
+                    "SELECT processing_status FROM content WHERE id = $id",
+                    {"id": item.id},
+                )
+                parsed = surreal_repo._parse_query_result(raw)
+                if parsed and parsed[0].get("processing_status") == "completed":
+                    logger.info("  Skipping %s (already processed)", content_id)
+                    stats["skipped"] += 1
+                    continue
 
             logger.info(
                 "Processing %s: %s (%s)",
@@ -209,8 +172,8 @@ async def main():
             )
 
             if args.dry_run:
-                logger.info("  [DRY RUN] Would classify content")
-                stats["classified"] += 1
+                logger.info("  [DRY RUN] Would process content")
+                stats["processed"] += 1
                 continue
 
             # Download content text
@@ -223,10 +186,10 @@ async def main():
                 continue
 
             # Set status to processing before LLM call (enables resume on interrupt)
-            await surreal_repo.update_content_classification_status(content_id, "processing")
+            await surreal_repo.update_content_processing_status(content_id, "processing")
 
             try:
-                result = await classification_service.classify_content(
+                result = await pipeline_service.process(
                     content_id=content_id,
                     content_text=content_text,
                     content_type=item.content_type,
@@ -234,28 +197,24 @@ async def main():
                 )
 
                 if result:
-                    await surreal_repo.update_content_classification(
-                        content_id, result.model_dump()
+                    await surreal_repo.update_content_processing_result(
+                        content_id, result.model_dump(mode="json"), settings.app_version
                     )
                     logger.info(
-                        "  Classified: tier=%s score=%d labels=%s",
+                        "  Processed: tier=%s score=%d tags=%s",
                         result.tier,
                         result.quality_score,
-                        result.labels,
+                        result.tags,
                     )
-                    stats["classified"] += 1
+                    stats["processed"] += 1
                 else:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
-                    logger.warning("  Classification returned None")
+                    await surreal_repo.update_content_processing_status(content_id, "failed")
+                    logger.warning("  Processing returned None")
                     stats["failed"] += 1
 
             except Exception as e:
-                logger.error("  Classification failed: %s", e)
-                await surreal_repo.update_content_classification_status(
-                    content_id, "failed"
-                )
+                logger.error("  Processing failed: %s", e)
+                await surreal_repo.update_content_processing_status(content_id, "failed")
                 stats["failed"] += 1
 
         offset += batch_size
@@ -267,10 +226,10 @@ async def main():
     # Report stats
     duration = (datetime.now() - start_time).total_seconds()
     logger.info("=" * 60)
-    logger.info("Classification complete!")
+    logger.info("Processing complete!")
     logger.info("Duration: %.2f seconds", duration)
     logger.info("Total: %d", stats["total"])
-    logger.info("Classified: %d", stats["classified"])
+    logger.info("Processed: %d", stats["processed"])
     logger.info("Skipped: %d", stats["skipped"])
     logger.info("Failed: %d", stats["failed"])
     logger.info("=" * 60)

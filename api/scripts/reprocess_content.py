@@ -178,7 +178,7 @@ class ContentReprocessor:
 
         # Check if entity extraction already done (skip if --entities-only and completed)
         if entities_only:
-            extraction_status = getattr(item, "entity_extraction_status", None)
+            extraction_status = getattr(item, "processing_status", None)
             if extraction_status == "completed":
                 logger.info("  Entity extraction already completed, skipping")
                 self.stats["skipped"] += 1
@@ -228,9 +228,7 @@ class ContentReprocessor:
 
         try:
             # Mark as processing
-            await self.surreal_repo.update_content_extraction_status(
-                content_id, "processing"
-            )
+            await self.surreal_repo.update_content_processing_status(content_id, "processing")
 
             # Run entity resolution pipeline
             result = await self.entity_resolution.process_content(
@@ -244,10 +242,7 @@ class ContentReprocessor:
             self.stats["entities_created"] += result.entities_created
             self.stats["entity_edges_created"] += len(result.edges)
 
-            logger.info(
-                f"  Created {result.entities_created} entities, "
-                f"{len(result.edges)} edges"
-            )
+            logger.info(f"  Created {result.entities_created} entities, {len(result.edges)} edges")
 
             if result.metrics:
                 logger.info(
@@ -258,9 +253,7 @@ class ContentReprocessor:
 
         except Exception as e:
             logger.error(f"  Entity extraction failed: {e}")
-            await self.surreal_repo.update_content_extraction_status(
-                content_id, "failed"
-            )
+            await self.surreal_repo.update_content_processing_status(content_id, "failed")
             raise
 
     async def _get_content_text(self, item) -> str | None:
@@ -320,6 +313,7 @@ class ContentReprocessor:
 
             # Simple URL extraction
             import re
+
             url_pattern = r'https?://[^\s<>"\'\\]+'
             urls = re.findall(url_pattern, description)
             return urls
@@ -445,9 +439,7 @@ class ContentReprocessor:
                 for link in extracted_links:
                     # Try to resolve link target by title
                     target_id = None
-                    target_content = await self.surreal_repo.find_content_by_title(
-                        link.target
-                    )
+                    target_content = await self.surreal_repo.find_content_by_title(link.target)
                     if target_content and target_content.id:
                         target_id = target_content.id
                         logger.info(
@@ -455,9 +447,7 @@ class ContentReprocessor:
                             f"'{link.target}' to content {target_id}"
                         )
                     else:
-                        logger.info(
-                            f"    Unresolved link '{link.link_text}' -> '{link.target}'"
-                        )
+                        logger.info(f"    Unresolved link '{link.link_text}' -> '{link.target}'")
 
                     # Store link
                     link_model = LinkModel(
@@ -471,9 +461,7 @@ class ContentReprocessor:
             else:
                 logger.info(f"  [DRY RUN] Would create {len(extracted_links)} links:")
                 for link in extracted_links[:5]:  # Show first 5
-                    logger.info(
-                        f"    - {link.link_type}: '{link.link_text}' -> '{link.target}'"
-                    )
+                    logger.info(f"    - {link.link_type}: '{link.link_text}' -> '{link.target}'")
                 if len(extracted_links) > 5:
                     logger.info(f"    ... and {len(extracted_links) - 5} more")
 
@@ -528,18 +516,21 @@ def _create_entity_resolution_service(surreal_repo: SurrealDBRepository):
 
         try:
             from menos.services.url_detector import URLDetector
+
             url_detector = URLDetector()
         except ImportError:
             logger.warning("URL detector not available")
 
         try:
             from menos.services.sponsored_filter import SponsoredFilter
+
             sponsored_filter = SponsoredFilter()
         except ImportError:
             logger.warning("Sponsored filter not available")
 
         try:
             from menos.services.entity_fetchers.github import GitHubFetcher
+
             github_fetcher = GitHubFetcher(
                 proxy_username=settings.webshare_proxy_username,
                 proxy_password=settings.webshare_proxy_password,
@@ -549,6 +540,7 @@ def _create_entity_resolution_service(surreal_repo: SurrealDBRepository):
 
         try:
             from menos.services.entity_fetchers.arxiv import ArxivFetcher
+
             arxiv_fetcher = ArxivFetcher()
         except ImportError:
             logger.warning("ArXiv fetcher not available")

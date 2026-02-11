@@ -389,3 +389,29 @@ async def get_unified_pipeline_service():
         repo=repo,
         settings=settings,
     )
+
+
+async def get_job_repository():
+    """Get JobRepository instance for dependency injection."""
+    from menos.services.jobs import JobRepository
+
+    repo = await get_surreal_repo()
+    return JobRepository(repo.db)
+
+
+async def get_pipeline_orchestrator():
+    """Get PipelineOrchestrator instance for dependency injection."""
+    from menos.services.pipeline_orchestrator import PipelineOrchestrator
+
+    pipeline = await get_unified_pipeline_service()
+    job_repo = await get_job_repository()
+    repo = await get_surreal_repo()
+    callback = get_callback_service()
+    return PipelineOrchestrator(pipeline, job_repo, repo, settings, callback)
+
+
+def get_callback_service():
+    """Get CallbackService instance for dependency injection."""
+    from menos.services.callbacks import CallbackService
+
+    return CallbackService(settings)

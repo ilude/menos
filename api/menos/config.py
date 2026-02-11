@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     unified_pipeline_model: str = ""
     unified_pipeline_max_concurrency: int = 4
 
+    # Pipeline Callbacks
+    callback_url: str | None = None
+    callback_secret: str | None = None
+
     # Content Classification
     classification_enabled: bool = True
     classification_provider: LLMProviderType = "openrouter"

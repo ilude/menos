@@ -7,21 +7,6 @@ import pytest
 from menos.services.entity_resolution import ResolutionResult
 
 
-@pytest.fixture
-def mock_entity_resolution_service():
-    """Mock EntityResolutionService."""
-    service = MagicMock()
-    service.process_content = AsyncMock(
-        return_value=ResolutionResult(
-            edges=[],
-            entities_created=2,
-            entities_reused=1,
-            metrics=None,
-        )
-    )
-    return service
-
-
 def _setup_youtube_mocks(
     mock_youtube_service, mock_metadata_service, mock_surreal_repo, mock_minio_storage
 ):
@@ -75,10 +60,10 @@ def _setup_youtube_mocks(
     mock_minio_storage.upload = AsyncMock(return_value=1000)
 
 
-class TestYouTubeEntityExtraction:
-    """Tests for entity extraction wiring in YouTube ingest."""
+class TestYouTubeUnifiedPipeline:
+    """Tests for unified pipeline wiring in YouTube ingest."""
 
-    def test_ingest_video_triggers_entity_extraction(
+    def test_ingest_video_submits_to_pipeline(
         self,
         authed_client,
         mock_surreal_repo,
@@ -86,28 +71,11 @@ class TestYouTubeEntityExtraction:
         mock_metadata_service,
         mock_minio_storage,
         mock_embedding_service,
-        mock_classification_service,
-        monkeypatch,
+        mock_pipeline_orchestrator,
     ):
-        """After ingest, entity extraction background task is created."""
+        """After ingest, content is submitted to the unified pipeline."""
         _setup_youtube_mocks(
             mock_youtube_service, mock_metadata_service, mock_surreal_repo, mock_minio_storage
-        )
-
-        mock_resolution_svc = MagicMock()
-        mock_resolution_svc.process_content = AsyncMock(
-            return_value=ResolutionResult(
-                edges=[], entities_created=0, entities_reused=0, metrics=None
-            )
-        )
-
-        from menos.main import app
-        from menos.services.di import get_entity_resolution_service
-
-        app.dependency_overrides[get_entity_resolution_service] = lambda: mock_resolution_svc
-
-        monkeypatch.setattr(
-            "menos.routers.youtube.settings", MagicMock(entity_extraction_enabled=True)
         )
 
         response = authed_client.post(
@@ -116,10 +84,9 @@ class TestYouTubeEntityExtraction:
         )
 
         assert response.status_code == 200
+        mock_pipeline_orchestrator.submit.assert_awaited_once()
 
-        app.dependency_overrides.pop(get_entity_resolution_service, None)
-
-    def test_entity_extraction_does_not_block_response(
+    def test_pipeline_does_not_block_response(
         self,
         authed_client,
         mock_surreal_repo,
@@ -127,28 +94,11 @@ class TestYouTubeEntityExtraction:
         mock_metadata_service,
         mock_minio_storage,
         mock_embedding_service,
-        mock_classification_service,
-        monkeypatch,
+        mock_pipeline_orchestrator,
     ):
-        """Ingest response returns immediately (fire-and-forget background task)."""
+        """Ingest response returns immediately (pipeline runs in background)."""
         _setup_youtube_mocks(
             mock_youtube_service, mock_metadata_service, mock_surreal_repo, mock_minio_storage
-        )
-
-        mock_resolution_svc = MagicMock()
-        mock_resolution_svc.process_content = AsyncMock(
-            return_value=ResolutionResult(
-                edges=[], entities_created=0, entities_reused=0, metrics=None
-            )
-        )
-
-        from menos.main import app
-        from menos.services.di import get_entity_resolution_service
-
-        app.dependency_overrides[get_entity_resolution_service] = lambda: mock_resolution_svc
-
-        monkeypatch.setattr(
-            "menos.routers.youtube.settings", MagicMock(entity_extraction_enabled=True)
         )
 
         response = authed_client.post(
@@ -156,14 +106,11 @@ class TestYouTubeEntityExtraction:
             json={"url": "https://www.youtube.com/watch?v=test_video"},
         )
 
-        # Response returns 200 immediately — extraction runs in background
         assert response.status_code == 200
         data = response.json()
         assert data["video_id"] == "test_video"
 
-        app.dependency_overrides.pop(get_entity_resolution_service, None)
-
-    def test_entity_extraction_skipped_when_disabled(
+    def test_ingest_returns_job_id_when_pipeline_enabled(
         self,
         authed_client,
         mock_surreal_repo,
@@ -171,24 +118,16 @@ class TestYouTubeEntityExtraction:
         mock_metadata_service,
         mock_minio_storage,
         mock_embedding_service,
-        mock_classification_service,
-        monkeypatch,
+        mock_pipeline_orchestrator,
     ):
-        """If entity_extraction_enabled=False, no extraction task is created."""
+        """Response includes job_id when pipeline creates a job."""
+        from menos.models import PipelineJob
+
         _setup_youtube_mocks(
             mock_youtube_service, mock_metadata_service, mock_surreal_repo, mock_minio_storage
         )
-
-        mock_resolution_svc = MagicMock()
-        mock_resolution_svc.process_content = AsyncMock()
-
-        from menos.main import app
-        from menos.services.di import get_entity_resolution_service
-
-        app.dependency_overrides[get_entity_resolution_service] = lambda: mock_resolution_svc
-
-        monkeypatch.setattr(
-            "menos.routers.youtube.settings", MagicMock(entity_extraction_enabled=False)
+        mock_pipeline_orchestrator.submit.return_value = PipelineJob(
+            id="job123", resource_key="yt:test_video", content_id="content1"
         )
 
         response = authed_client.post(
@@ -197,53 +136,22 @@ class TestYouTubeEntityExtraction:
         )
 
         assert response.status_code == 200
-        mock_resolution_svc.process_content.assert_not_awaited()
-
-        app.dependency_overrides.pop(get_entity_resolution_service, None)
-
-    def test_entity_extraction_receives_description_urls(
-        self,
-        authed_client,
-        mock_surreal_repo,
-        mock_youtube_service,
-        mock_metadata_service,
-        mock_minio_storage,
-        mock_embedding_service,
-        mock_classification_service,
-        mock_entity_resolution_service,
-        monkeypatch,
-    ):
-        """description_urls from YouTube metadata are passed to entity extraction."""
-        _setup_youtube_mocks(
-            mock_youtube_service, mock_metadata_service, mock_surreal_repo, mock_minio_storage
-        )
-
-        monkeypatch.setattr(
-            "menos.routers.youtube.settings", MagicMock(entity_extraction_enabled=True)
-        )
-
-        response = authed_client.post(
-            "/api/v1/youtube/ingest",
-            json={"url": "https://www.youtube.com/watch?v=test_video"},
-        )
-
-        assert response.status_code == 200
+        data = response.json()
+        assert data["job_id"] == "job123"
 
 
-class TestContentEntityExtraction:
-    """Tests for entity extraction wiring in content upload."""
+class TestContentUnifiedPipeline:
+    """Tests for unified pipeline wiring in content upload."""
 
-    def test_content_upload_triggers_entity_extraction(
+    def test_content_upload_submits_to_pipeline(
         self,
         client,
         request_signer,
         mock_surreal_repo,
         mock_minio_storage,
-        mock_classification_service,
-        mock_entity_resolution_service,
-        monkeypatch,
+        mock_pipeline_orchestrator,
     ):
-        """Upload triggers background entity extraction."""
+        """Upload submits content to the unified pipeline."""
         from datetime import UTC, datetime
 
         from menos.models import ContentMetadata
@@ -260,10 +168,6 @@ class TestContentEntityExtraction:
         )
         mock_surreal_repo.create_content = AsyncMock(return_value=created_content)
         mock_surreal_repo.find_content_by_title = AsyncMock(return_value=None)
-
-        monkeypatch.setattr(
-            "menos.routers.content.settings", MagicMock(entity_extraction_enabled=True)
-        )
 
         import io
 
@@ -277,21 +181,20 @@ class TestContentEntityExtraction:
         )
 
         assert response.status_code == 200
+        mock_pipeline_orchestrator.submit.assert_awaited_once()
 
-    def test_content_upload_entity_extraction_disabled(
+    def test_content_upload_returns_job_id(
         self,
         client,
         request_signer,
         mock_surreal_repo,
         mock_minio_storage,
-        mock_classification_service,
-        mock_entity_resolution_service,
-        monkeypatch,
+        mock_pipeline_orchestrator,
     ):
-        """Upload respects entity_extraction_enabled=False."""
+        """Upload response includes job_id when pipeline creates a job."""
         from datetime import UTC, datetime
 
-        from menos.models import ContentMetadata
+        from menos.models import ContentMetadata, PipelineJob
 
         created_content = ContentMetadata(
             id="content1",
@@ -305,9 +208,8 @@ class TestContentEntityExtraction:
         )
         mock_surreal_repo.create_content = AsyncMock(return_value=created_content)
         mock_surreal_repo.find_content_by_title = AsyncMock(return_value=None)
-
-        monkeypatch.setattr(
-            "menos.routers.content.settings", MagicMock(entity_extraction_enabled=False)
+        mock_pipeline_orchestrator.submit.return_value = PipelineJob(
+            id="job456", resource_key="cid:content1", content_id="content1"
         )
 
         import io
@@ -322,7 +224,8 @@ class TestContentEntityExtraction:
         )
 
         assert response.status_code == 200
-        mock_entity_resolution_service.process_content.assert_not_awaited()
+        data = response.json()
+        assert data["job_id"] == "job456"
 
 
 class TestEntityExtractionBackgroundTask:

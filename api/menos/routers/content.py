@@ -1,6 +1,5 @@
 """Content CRUD endpoints."""
 
-import asyncio
 import logging
 import uuid
 from typing import Annotated
@@ -9,20 +8,17 @@ from fastapi import APIRouter, Depends, Query, UploadFile
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
-from menos.config import settings
 from menos.models import ContentMetadata, LinkModel
-from menos.services.classification import ClassificationService
 from menos.services.di import (
-    get_classification_service,
-    get_entity_resolution_service,
     get_minio_storage,
+    get_pipeline_orchestrator,
     get_surreal_repo,
 )
-from menos.services.entity_resolution import EntityResolutionService
 from menos.services.frontmatter import FrontmatterParser
 from menos.services.linking import LinkExtractor
+from menos.services.pipeline_orchestrator import PipelineOrchestrator
+from menos.services.resource_key import generate_resource_key
 from menos.services.storage import MinIOStorage, SurrealDBRepository
-from menos.tasks import background_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +50,7 @@ class ContentCreateResponse(BaseModel):
     id: str
     file_path: str
     file_size: int
+    job_id: str | None = None
 
 
 class ContentUpdateRequest(BaseModel):
@@ -172,8 +169,7 @@ async def create_content(
     tags: Annotated[list[str] | None, Query()] = None,
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
-    classification_service: ClassificationService = Depends(get_classification_service),
-    entity_resolution_service: EntityResolutionService = Depends(get_entity_resolution_service),
+    orchestrator: PipelineOrchestrator = Depends(get_pipeline_orchestrator),
 ):
     """Upload new content."""
     content_id = str(uuid.uuid4())
@@ -226,112 +222,23 @@ async def create_content(
             surreal_repo=surreal_repo,
         )
 
-    # Launch classification as fire-and-forget background task
+    # Submit to unified pipeline
     text_content = file_content.decode("utf-8")
     final_content_id = created.id or content_id
-    min_len = classification_service.settings.classification_min_content_length
-    if len(text_content) >= min_len:
-        await surreal_repo.update_content_classification_status(final_content_id, "pending")
-        final_title = metadata.title or "Untitled"
-
-        async def _classify_background():
-            try:
-                result = await classification_service.classify_content(
-                    content_id=final_content_id,
-                    content_text=text_content,
-                    content_type=content_type,
-                    title=final_title,
-                )
-                if result:
-                    await surreal_repo.update_content_classification(
-                        final_content_id, result.model_dump()
-                    )
-                    logger.info(
-                        "Classification complete for %s: tier=%s score=%d",
-                        final_content_id,
-                        result.tier,
-                        result.quality_score,
-                    )
-                else:
-                    await surreal_repo.update_content_classification_status(
-                        final_content_id, "failed"
-                    )
-                    logger.warning("Classification returned no result for %s", final_content_id)
-            except asyncio.CancelledError:
-                logger.warning("Classification cancelled for %s (shutdown?)", final_content_id)
-                try:
-                    await surreal_repo.update_content_classification_status(
-                        final_content_id, "failed"
-                    )
-                except Exception:
-                    pass
-                raise
-            except Exception as e:
-                logger.error(
-                    "Background classification failed for %s: %s",
-                    final_content_id,
-                    e,
-                    exc_info=True,
-                )
-                try:
-                    await surreal_repo.update_content_classification_status(
-                        final_content_id, "failed"
-                    )
-                except Exception as inner_e:
-                    logger.error(
-                        "Failed to mark classification as failed for %s: %s",
-                        final_content_id,
-                        inner_e,
-                    )
-
-        task = asyncio.create_task(_classify_background())
-        background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
-
-    # Launch entity extraction as fire-and-forget background task
-    if settings.entity_extraction_enabled:
-        await surreal_repo.update_content_extraction_status(final_content_id, "pending")
-
-        async def _extract_entities_background():
-            try:
-                await entity_resolution_service.process_content(
-                    content_id=final_content_id,
-                    content_text=text_content,
-                    content_type=content_type,
-                    title=final_title,
-                )
-                logger.info("Entity extraction complete for %s", final_content_id)
-            except asyncio.CancelledError:
-                logger.warning("Entity extraction cancelled for %s (shutdown?)", final_content_id)
-                try:
-                    await surreal_repo.update_content_extraction_status(final_content_id, "failed")
-                except Exception:
-                    pass
-                raise
-            except Exception as e:
-                logger.error(
-                    "Background entity extraction failed for %s: %s",
-                    final_content_id,
-                    e,
-                    exc_info=True,
-                )
-                try:
-                    await surreal_repo.update_content_extraction_status(final_content_id, "failed")
-                except Exception as inner_e:
-                    logger.error(
-                        "Failed to mark entity extraction as failed for %s: %s",
-                        final_content_id,
-                        inner_e,
-                    )
-
-        ee_task = asyncio.create_task(_extract_entities_background())
-        background_tasks.add(ee_task)
-        ee_task.add_done_callback(background_tasks.discard)
+    resource_key = generate_resource_key(content_type, final_content_id)
+    job = await orchestrator.submit(
+        final_content_id,
+        text_content,
+        content_type,
+        metadata.title or "Untitled",
+        resource_key,
+    )
 
     return ContentCreateResponse(
         id=final_content_id,
         file_path=file_path,
         file_size=file_size,
+        job_id=job.id if job else None,
     )
 
 

@@ -1,6 +1,5 @@
 """YouTube ingestion endpoints."""
 
-import asyncio
 import io
 import json
 import logging
@@ -10,25 +9,22 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
-from menos.config import settings
 from menos.models import ChunkModel, ContentMetadata
 from menos.services.chunking import ChunkingService
-from menos.services.classification import ClassificationService
 from menos.services.di import (
-    get_classification_service,
-    get_entity_resolution_service,
     get_minio_storage,
+    get_pipeline_orchestrator,
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
-from menos.services.entity_resolution import EntityResolutionService
+from menos.services.pipeline_orchestrator import PipelineOrchestrator
+from menos.services.resource_key import generate_resource_key
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 from menos.services.youtube import YouTubeService, get_youtube_service
 from menos.services.youtube_metadata import (
     YouTubeMetadataService,
     get_youtube_metadata_service,
 )
-from menos.tasks import background_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +47,7 @@ class YouTubeIngestResponse(BaseModel):
     transcript_length: int
     chunks_created: int
     file_path: str
-    classification_status: str | None = None
+    job_id: str | None = None
 
 
 class YouTubeVideoInfo(BaseModel):
@@ -87,8 +83,7 @@ async def ingest_video(
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
-    classification_service: ClassificationService = Depends(get_classification_service),
-    entity_resolution_service: EntityResolutionService = Depends(get_entity_resolution_service),
+    orchestrator: PipelineOrchestrator = Depends(get_pipeline_orchestrator),
 ):
     """Ingest a YouTube video transcript.
 
@@ -190,103 +185,11 @@ async def ingest_video(
             await surreal_repo.create_chunk(chunk)
             chunks_created += 1
 
-    # Launch classification as fire-and-forget background task
-    classification_status = None
-    min_len = classification_service.settings.classification_min_content_length
-    if len(transcript.full_text) >= min_len:
-        await surreal_repo.update_content_classification_status(content_id, "pending")
-        classification_status = "pending"
-
-        async def _classify_background():
-            try:
-                result = await classification_service.classify_content(
-                    content_id=content_id,
-                    content_text=transcript.full_text,
-                    content_type="youtube",
-                    title=video_title,
-                )
-                if result:
-                    await surreal_repo.update_content_classification(
-                        content_id, result.model_dump()
-                    )
-                    if result.summary:
-                        summary_path = f"youtube/{video_id}/summary.md"
-                        summary_data = io.BytesIO(result.summary.encode("utf-8"))
-                        await minio_storage.upload(summary_path, summary_data, "text/markdown")
-                    logger.info(
-                        "Classification complete for %s: tier=%s score=%d",
-                        content_id,
-                        result.tier,
-                        result.quality_score,
-                    )
-                else:
-                    await surreal_repo.update_content_classification_status(content_id, "failed")
-                    logger.warning("Classification returned no result for %s", content_id)
-            except asyncio.CancelledError:
-                logger.warning("Classification cancelled for %s (shutdown?)", content_id)
-                try:
-                    await surreal_repo.update_content_classification_status(content_id, "failed")
-                except Exception:
-                    pass
-                raise
-            except Exception as e:
-                logger.error(
-                    "Background classification failed for %s: %s", content_id, e, exc_info=True
-                )
-                try:
-                    await surreal_repo.update_content_classification_status(content_id, "failed")
-                except Exception as inner_e:
-                    logger.error(
-                        "Failed to mark classification as failed for %s: %s",
-                        content_id,
-                        inner_e,
-                    )
-
-        task = asyncio.create_task(_classify_background())
-        background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
-
-    # Launch entity extraction as fire-and-forget background task
-    if settings.entity_extraction_enabled:
-        description_urls = yt_metadata.description_urls if yt_metadata else []
-        await surreal_repo.update_content_extraction_status(content_id, "pending")
-
-        async def _extract_entities_background():
-            try:
-                await entity_resolution_service.process_content(
-                    content_id=content_id,
-                    content_text=transcript.full_text,
-                    content_type="youtube",
-                    title=video_title,
-                    description_urls=description_urls,
-                )
-                logger.info("Entity extraction complete for %s", content_id)
-            except asyncio.CancelledError:
-                logger.warning("Entity extraction cancelled for %s (shutdown?)", content_id)
-                try:
-                    await surreal_repo.update_content_extraction_status(content_id, "failed")
-                except Exception:
-                    pass
-                raise
-            except Exception as e:
-                logger.error(
-                    "Background entity extraction failed for %s: %s",
-                    content_id,
-                    e,
-                    exc_info=True,
-                )
-                try:
-                    await surreal_repo.update_content_extraction_status(content_id, "failed")
-                except Exception as inner_e:
-                    logger.error(
-                        "Failed to mark entity extraction as failed for %s: %s",
-                        content_id,
-                        inner_e,
-                    )
-
-        ee_task = asyncio.create_task(_extract_entities_background())
-        background_tasks.add(ee_task)
-        ee_task.add_done_callback(background_tasks.discard)
+    # Submit to unified pipeline
+    resource_key = generate_resource_key("youtube", video_id)
+    job = await orchestrator.submit(
+        content_id, transcript.full_text, "youtube", video_title, resource_key
+    )
 
     return YouTubeIngestResponse(
         id=content_id,
@@ -295,7 +198,7 @@ async def ingest_video(
         transcript_length=len(transcript.full_text),
         chunks_created=chunks_created,
         file_path=file_path,
-        classification_status=classification_status,
+        job_id=job.id if job else None,
     )
 
 

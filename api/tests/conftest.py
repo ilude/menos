@@ -16,9 +16,9 @@ from fastapi.testclient import TestClient
 
 from menos.client.signer import RequestSigner
 from menos.services.di import (
-    get_classification_service,
-    get_entity_resolution_service,
+    get_job_repository,
     get_minio_storage,
+    get_pipeline_orchestrator,
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
@@ -156,6 +156,26 @@ def mock_entity_resolution_service():
 
 
 @pytest.fixture
+def mock_pipeline_orchestrator():
+    """Mock pipeline orchestrator."""
+    orchestrator = MagicMock()
+    orchestrator.submit = AsyncMock(return_value=None)
+    return orchestrator
+
+
+@pytest.fixture
+def mock_job_repository():
+    """Mock job repository."""
+    repo = MagicMock()
+    repo.create_job = AsyncMock()
+    repo.get_job = AsyncMock()
+    repo.find_active_job_by_resource_key = AsyncMock(return_value=None)
+    repo.update_job_status = AsyncMock()
+    repo.list_jobs = AsyncMock(return_value=([], 0))
+    return repo
+
+
+@pytest.fixture
 def app_with_keys(
     keys_dir,
     monkeypatch,
@@ -164,8 +184,8 @@ def app_with_keys(
     mock_minio_storage,
     mock_youtube_service,
     mock_metadata_service,
-    mock_classification_service,
-    mock_entity_resolution_service,
+    mock_pipeline_orchestrator,
+    mock_job_repository,
 ):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
@@ -189,8 +209,8 @@ def app_with_keys(
     app.dependency_overrides[get_minio_storage] = lambda: mock_minio_storage
     app.dependency_overrides[get_youtube_service] = lambda: mock_youtube_service
     app.dependency_overrides[get_youtube_metadata_service] = lambda: mock_metadata_service
-    app.dependency_overrides[get_classification_service] = lambda: mock_classification_service
-    app.dependency_overrides[get_entity_resolution_service] = lambda: mock_entity_resolution_service
+    app.dependency_overrides[get_pipeline_orchestrator] = lambda: mock_pipeline_orchestrator
+    app.dependency_overrides[get_job_repository] = lambda: mock_job_repository
 
     yield app
 
