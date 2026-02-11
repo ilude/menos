@@ -26,6 +26,7 @@ from menos.services.youtube_metadata import (
     YouTubeMetadataService,
     get_youtube_metadata_service,
 )
+from menos.tasks import background_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -265,20 +266,41 @@ Provide:
                     await surreal_repo.update_content_classification(
                         content_id, result.model_dump()
                     )
+                    logger.info(
+                        "Classification complete for %s: tier=%s score=%d",
+                        content_id, result.tier, result.quality_score,
+                    )
                 else:
                     await surreal_repo.update_content_classification_status(
                         content_id, "failed"
                     )
-            except Exception as e:
-                logger.warning("Background classification failed for %s: %s", content_id, e)
+                    logger.warning("Classification returned no result for %s", content_id)
+            except asyncio.CancelledError:
+                logger.warning("Classification cancelled for %s (shutdown?)", content_id)
                 try:
                     await surreal_repo.update_content_classification_status(
                         content_id, "failed"
                     )
                 except Exception:
                     pass
+                raise
+            except Exception as e:
+                logger.error(
+                    "Background classification failed for %s: %s", content_id, e, exc_info=True
+                )
+                try:
+                    await surreal_repo.update_content_classification_status(
+                        content_id, "failed"
+                    )
+                except Exception as inner_e:
+                    logger.error(
+                        "Failed to mark classification as failed for %s: %s",
+                        content_id, inner_e,
+                    )
 
-        asyncio.create_task(_classify_background())
+        task = asyncio.create_task(_classify_background())
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
     return YouTubeIngestResponse(
         id=content_id,
@@ -394,20 +416,41 @@ async def upload_transcript(
                     await surreal_repo.update_content_classification(
                         content_id, result.model_dump()
                     )
+                    logger.info(
+                        "Classification complete for %s: tier=%s score=%d",
+                        content_id, result.tier, result.quality_score,
+                    )
                 else:
                     await surreal_repo.update_content_classification_status(
                         content_id, "failed"
                     )
-            except Exception as e:
-                logger.warning("Background classification failed for %s: %s", content_id, e)
+                    logger.warning("Classification returned no result for %s", content_id)
+            except asyncio.CancelledError:
+                logger.warning("Classification cancelled for %s (shutdown?)", content_id)
                 try:
                     await surreal_repo.update_content_classification_status(
                         content_id, "failed"
                     )
                 except Exception:
                     pass
+                raise
+            except Exception as e:
+                logger.error(
+                    "Background classification failed for %s: %s", content_id, e, exc_info=True
+                )
+                try:
+                    await surreal_repo.update_content_classification_status(
+                        content_id, "failed"
+                    )
+                except Exception as inner_e:
+                    logger.error(
+                        "Failed to mark classification as failed for %s: %s",
+                        content_id, inner_e,
+                    )
 
-        asyncio.create_task(_classify_background())
+        task = asyncio.create_task(_classify_background())
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
     return YouTubeIngestResponse(
         id=content_id,

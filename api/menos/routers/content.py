@@ -15,6 +15,7 @@ from menos.services.di import get_classification_service, get_minio_storage, get
 from menos.services.frontmatter import FrontmatterParser
 from menos.services.linking import LinkExtractor
 from menos.services.storage import MinIOStorage, SurrealDBRepository
+from menos.tasks import background_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -237,13 +238,20 @@ async def create_content(
                     await surreal_repo.update_content_classification(
                         final_content_id, result.model_dump()
                     )
+                    logger.info(
+                        "Classification complete for %s: tier=%s score=%d",
+                        final_content_id, result.tier, result.quality_score,
+                    )
                 else:
                     await surreal_repo.update_content_classification_status(
                         final_content_id, "failed"
                     )
-            except Exception as e:
+                    logger.warning(
+                        "Classification returned no result for %s", final_content_id
+                    )
+            except asyncio.CancelledError:
                 logger.warning(
-                    "Background classification failed for %s: %s", final_content_id, e
+                    "Classification cancelled for %s (shutdown?)", final_content_id
                 )
                 try:
                     await surreal_repo.update_content_classification_status(
@@ -251,8 +259,25 @@ async def create_content(
                     )
                 except Exception:
                     pass
+                raise
+            except Exception as e:
+                logger.error(
+                    "Background classification failed for %s: %s",
+                    final_content_id, e, exc_info=True,
+                )
+                try:
+                    await surreal_repo.update_content_classification_status(
+                        final_content_id, "failed"
+                    )
+                except Exception as inner_e:
+                    logger.error(
+                        "Failed to mark classification as failed for %s: %s",
+                        final_content_id, inner_e,
+                    )
 
-        asyncio.create_task(_classify_background())
+        task = asyncio.create_task(_classify_background())
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
     return ContentCreateResponse(
         id=final_content_id,

@@ -1,6 +1,8 @@
 """Menos API - Centralized content vault with semantic search."""
 
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,6 +12,18 @@ from surrealdb import Surreal
 from menos.config import get_settings
 from menos.routers import auth, classification, content, entities, graph, health, search, youtube
 from menos.services.migrator import MigrationService
+from menos.tasks import background_tasks
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(
+    logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+)
+logging.getLogger("menos").setLevel(LOG_LEVEL)
+logging.getLogger("menos").addHandler(_log_handler)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +62,11 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     run_migrations()
     yield
+    if background_tasks:
+        logger.info("Waiting for %d background task(s)...", len(background_tasks))
+        _done, pending = await asyncio.wait(background_tasks, timeout=30.0)
+        for t in pending:
+            t.cancel()
 
 
 app = FastAPI(
