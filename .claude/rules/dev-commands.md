@@ -52,4 +52,5 @@ PYTHONPATH=. uv run python scripts/search_videos.py "query"     # Semantic searc
 PYTHONPATH=. uv run python scripts/delete_video.py VIDEO_ID     # Delete a video
 PYTHONPATH=. uv run python scripts/filter_description_urls.py --all  # Classify URLs
 PYTHONPATH=. uv run python scripts/url_filter_status.py         # URL filter stats
+PYTHONPATH=. uv run python scripts/signed_request.py METHOD /path [body]  # Authenticated API requests
 ```
