@@ -25,12 +25,14 @@ Tests use `MagicMock` for sync methods (SurrealDB, httpx response.json) and `Asy
 ```bash
 uv run pytest tests/smoke/ -m smoke -v
 # Or CLI runner:
-uv run python scripts/smoke_test.py --url http://api.example.com -v
+uv run python scripts/smoke_test.py -v
 ```
+
+Target URL is read from `API_BASE_URL` in `.env` automatically. Override with `--url` if needed.
 
 | Variable | Description |
 |----------|-------------|
-| `SMOKE_TEST_URL` | Target API URL |
+| `API_BASE_URL` | Target API URL (in `.env`, used automatically) |
 | `SMOKE_TEST_KEY_FILE` | SSH private key for auth |
 
 ## Linting

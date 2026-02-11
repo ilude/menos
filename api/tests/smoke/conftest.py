@@ -10,16 +10,16 @@ from minio import Minio
 from surrealdb import Surreal
 
 from menos.client.signer import RequestSigner
+from menos.config import settings
 
 
 @pytest.fixture(scope="session")
 def smoke_base_url():
-    """Get the base URL for the live API from environment.
+    """Get the base URL for the live API from settings.
 
-    Uses SMOKE_TEST_URL env var, defaults to http://localhost:8000
+    Reads API_BASE_URL from .env via menos.config.settings.
     """
-    url = os.environ.get("SMOKE_TEST_URL", "http://localhost:8000")
-    return url.rstrip("/")
+    return settings.api_base_url.rstrip("/")
 
 
 @pytest.fixture(scope="session")
@@ -190,12 +190,10 @@ def smoke_first_entity_id(smoke_authed_get):
 
 @pytest.fixture(scope="session")
 def surreal_db(smoke_base_url):
-    """Direct SurrealDB connection, derived from SMOKE_TEST_URL host.
+    """Direct SurrealDB connection, derived from API base URL host.
 
     Uses SMOKE_SURREALDB_PORT (default 8080) and credentials from menos.config.
     """
-    from menos.config import settings
-
     parsed = urlparse(smoke_base_url)
     host = parsed.hostname
     port = os.environ.get("SMOKE_SURREALDB_PORT", "8080")
@@ -211,21 +209,11 @@ def surreal_db(smoke_base_url):
 
 
 @pytest.fixture(scope="session")
-def minio_client(smoke_base_url):
-    """Direct MinIO client, derived from SMOKE_TEST_URL host.
-
-    Uses SMOKE_MINIO_PORT (default 9000) and credentials from menos.config.
-    """
-    from menos.config import settings
-
-    parsed = urlparse(smoke_base_url)
-    host = parsed.hostname
-    port = os.environ.get("SMOKE_MINIO_PORT", "9000")
-    endpoint = f"{host}:{port}"
-
+def minio_client():
+    """Direct MinIO client using settings from .env."""
     try:
         client = Minio(
-            endpoint,
+            settings.minio_url,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
             secure=settings.minio_secure,
@@ -233,7 +221,7 @@ def minio_client(smoke_base_url):
         client.list_buckets()  # test connectivity
         return client
     except Exception as e:
-        pytest.skip(f"Cannot connect to MinIO at {endpoint}: {e}")
+        pytest.skip(f"Cannot connect to MinIO at {settings.minio_url}: {e}")
 
 
 def pytest_configure(config):

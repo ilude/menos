@@ -3,13 +3,14 @@
 
 import argparse
 import json
-import os
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
 from menos.client.signer import RequestSigner
+from menos.config import settings
 
 
 def main():
@@ -19,7 +20,7 @@ def main():
     parser.add_argument("body", nargs="?", default=None, help="JSON request body")
     parser.add_argument(
         "--key",
-        default=os.path.expanduser("~/.ssh/id_ed25519"),
+        default=str(Path.home() / ".ssh" / "id_ed25519"),
         help="Path to ed25519 private key (default: ~/.ssh/id_ed25519)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show request details")
@@ -31,7 +32,7 @@ def main():
     )
     args = parser.parse_args()
 
-    base_url = os.environ.get("SMOKE_TEST_URL", "http://localhost:8000")
+    base_url = settings.api_base_url
     method = args.method.upper()
     url = f"{base_url}{args.path}"
     parsed = urlparse(base_url)

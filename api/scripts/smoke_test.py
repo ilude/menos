@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from menos.config import settings
+
 
 def main() -> int:
     """Run smoke tests with environment configuration.
@@ -19,8 +21,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--url",
-        default="http://localhost:8000",
-        help="API base URL (default: http://localhost:8000)",
+        default=settings.api_base_url,
+        help="API base URL (reads API_BASE_URL from .env)",
     )
     parser.add_argument(
         "--key-file",
@@ -42,7 +44,7 @@ def main() -> int:
     args = parser.parse_args()
 
     # Set environment variables for smoke test fixtures
-    os.environ["SMOKE_TEST_URL"] = args.url
+    os.environ["API_BASE_URL"] = args.url
     os.environ["SMOKE_TEST_KEY_FILE"] = args.key_file
 
     # Build pytest command
