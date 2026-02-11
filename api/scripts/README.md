@@ -50,7 +50,7 @@ PYTHONPATH=. uv run python scripts/reprocess_content.py
   - `SURREALDB_PASSWORD`
   - `SURREALDB_NAMESPACE`
   - `SURREALDB_DATABASE`
-  - `MINIO_ENDPOINT`
+  - `MINIO_URL`
   - `MINIO_ACCESS_KEY`
   - `MINIO_SECRET_KEY`
   - `MINIO_BUCKET`

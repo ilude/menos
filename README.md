@@ -152,7 +152,7 @@ Environment variables (set in `.env`):
 |----------|-------------|
 | `SURREALDB_URL` | SurrealDB connection URL |
 | `SURREALDB_PASSWORD` | SurrealDB root password |
-| `MINIO_ENDPOINT` | MinIO server endpoint |
+| `MINIO_URL` | MinIO server endpoint |
 | `MINIO_ACCESS_KEY` | MinIO access key |
 | `MINIO_SECRET_KEY` | MinIO secret key |
 | `OLLAMA_URL` | Ollama API URL |
