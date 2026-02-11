@@ -56,3 +56,16 @@ PYTHONPATH=. uv run python scripts/filter_description_urls.py --all  # Classify 
 PYTHONPATH=. uv run python scripts/url_filter_status.py         # URL filter stats
 PYTHONPATH=. uv run python scripts/signed_request.py METHOD /path [body]  # Authenticated API requests
 ```
+
+## Versioning
+
+Run from repository root:
+
+```bash
+make version-show
+make version-check
+make version-bump-major
+make version-bump-minor
+make version-bump-patch
+make version-set VERSION=1.2.3
+```
