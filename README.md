@@ -115,7 +115,6 @@ Environment variables:
 | GET | `/api/v1/graph/neighborhood/{id}` | Yes | Local graph neighborhood (1-3 hops) |
 | **YouTube** |
 | POST | `/api/v1/youtube/ingest` | Yes | Ingest YouTube video by URL |
-| POST | `/api/v1/youtube/upload` | Yes | Upload pre-fetched transcript |
 | GET | `/api/v1/youtube/{video_id}` | Yes | Get YouTube video info |
 | GET | `/api/v1/youtube` | Yes | List ingested videos (supports `?channel_id=x` filtering) |
 | GET | `/api/v1/youtube/channels` | Yes | List channels with video counts |

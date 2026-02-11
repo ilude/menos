@@ -67,7 +67,6 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 
 ### YouTube
 - `POST /api/v1/youtube/ingest` — Ingest video by URL
-- `POST /api/v1/youtube/upload` — Upload pre-fetched transcript
 - `GET /api/v1/youtube/{video_id}` — Get video info
 - `GET /api/v1/youtube` — List videos (`channel_id` filter)
 - `GET /api/v1/youtube/channels` — List channels with counts
