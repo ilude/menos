@@ -19,7 +19,7 @@ flowchart LR
 
 | Entry Point | Use Case |
 |---|---|
-| `POST /youtube/ingest` | Ingest by YouTube URL — server fetches transcript (with optional Webshare proxy) and metadata |
+| `POST /youtube/ingest` | Ingest by YouTube URL — server fetches transcript (via Webshare proxy) and metadata |
 | `POST /content` | General file upload (markdown, text, PDF) |
 | `ingest_videos.py` | Batch ingestion from `data/youtube-videos.txt` via `/youtube/ingest` |
 
@@ -104,7 +104,7 @@ sequenceDiagram
     YTSvc-->>Router: video_id
 
     Router->>YTSvc: fetch_transcript(video_id)
-    Note over YTSvc: Optional Webshare proxy<br/>for IP-blocked regions
+    Note over YTSvc: Webshare proxy<br/>for IP-blocked regions
     YTSvc-->>Router: YouTubeTranscript
 
     Router->>MetaSvc: fetch_metadata(video_id)
@@ -269,7 +269,7 @@ The HTTP response returns after embedding generation completes. Classification r
 
 | Variable | Stage | Description |
 |---|---|---|
-| `WEBSHARE_PROXY_USERNAME/PASSWORD` | Fetch | Optional proxy for transcript fetching |
+| `WEBSHARE_PROXY_USERNAME/PASSWORD` | Fetch | **Required** proxy for transcript fetching |
 | `YOUTUBE_API_KEY` | Fetch | YouTube Data API v3 for metadata |
 | `MINIO_URL/ACCESS_KEY/SECRET_KEY/BUCKET` | Persist | MinIO connection |
 | `SURREALDB_URL/NAMESPACE/DATABASE/USER/PASSWORD` | Persist | SurrealDB connection |

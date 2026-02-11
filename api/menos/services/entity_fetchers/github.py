@@ -22,7 +22,7 @@ class RepoMetadata:
 
 
 class GitHubFetcher:
-    """Fetches GitHub repository metadata with optional proxy support."""
+    """Fetches GitHub repository metadata via Webshare proxy."""
 
     GITHUB_API_BASE = "https://api.github.com"
     MAX_RETRIES = 3
@@ -31,24 +31,20 @@ class GitHubFetcher:
 
     def __init__(
         self,
-        proxy_username: str | None = None,
-        proxy_password: str | None = None,
+        proxy_username: str,
+        proxy_password: str,
         timeout: float = 10.0,
     ):
         """Initialize GitHub fetcher.
 
         Args:
-            proxy_username: Webshare proxy username (optional)
-            proxy_password: Webshare proxy password (optional)
+            proxy_username: Webshare proxy username
+            proxy_password: Webshare proxy password
             timeout: HTTP request timeout in seconds
         """
         self.timeout = timeout
-
-        if proxy_username and proxy_password:
-            proxy_url = f"http://{proxy_username}:{proxy_password}@p.webshare.io:80"
-            self.proxy = httpx.Proxy(url=proxy_url)
-        else:
-            self.proxy = None
+        proxy_url = f"http://{proxy_username}:{proxy_password}@p.webshare.io:80"
+        self.proxy = httpx.Proxy(url=proxy_url)
 
     async def fetch_repo(self, owner: str, repo: str) -> RepoMetadata | None:
         """Fetch repository metadata from GitHub API.
@@ -131,6 +127,13 @@ class GitHubFetcher:
                     continue
                 raise
 
+            except httpx.ProxyError as e:
+                raise httpx.ProxyError(
+                    f"Webshare proxy connection failed. Check "
+                    f"WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD "
+                    f"in .env. Original error: {e}"
+                ) from e
+
             except (httpx.ConnectError, httpx.TimeoutException):
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(delay)
@@ -142,8 +145,8 @@ class GitHubFetcher:
 
 
 def get_github_fetcher(
-    proxy_username: str | None = None,
-    proxy_password: str | None = None,
+    proxy_username: str,
+    proxy_password: str,
 ) -> GitHubFetcher:
     """Get GitHub fetcher instance.
 

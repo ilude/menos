@@ -2,7 +2,7 @@
 """Script to ingest YouTube videos from a list file.
 
 Posts each URL to the /api/v1/youtube/ingest endpoint, which handles
-transcript fetching (with optional Webshare proxy) server-side.
+transcript fetching (via Webshare proxy) server-side.
 """
 
 import json

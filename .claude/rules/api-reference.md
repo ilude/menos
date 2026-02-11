@@ -30,6 +30,8 @@ Environment variables (see `api/menos/config.py`):
 | `AGENT_SYNTHESIS_MODEL` | Model name for synthesis |
 | `AGENT_RERANK_PROVIDER` | Reranker (rerankers/llm/none) |
 | `AGENT_RERANK_MODEL` | Cross-encoder model for reranking |
+| `WEBSHARE_PROXY_USERNAME` | Webshare proxy username (**required**) |
+| `WEBSHARE_PROXY_PASSWORD` | Webshare proxy password (**required**) |
 | `OPENAI_API_KEY` | OpenAI API key (optional) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (optional) |
 | `OPENROUTER_API_KEY` | OpenRouter API key (optional) |

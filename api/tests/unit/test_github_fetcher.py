@@ -14,11 +14,6 @@ class TestGitHubFetcher:
 
     @pytest.fixture
     def fetcher(self) -> GitHubFetcher:
-        """Create a GitHub fetcher without proxy."""
-        return GitHubFetcher()
-
-    @pytest.fixture
-    def fetcher_with_proxy(self) -> GitHubFetcher:
         """Create a GitHub fetcher with proxy credentials."""
         return GitHubFetcher(proxy_username="test_user", proxy_password="test_pass")
 
@@ -95,16 +90,21 @@ class TestGitHubFetcher:
         assert result.language is None
         assert result.topics == []
 
-    async def test_proxy_configuration(self, fetcher_with_proxy: GitHubFetcher):
-        """Test proxy configuration is set correctly."""
-        assert fetcher_with_proxy.proxy is not None
-        assert isinstance(fetcher_with_proxy.proxy, httpx.Proxy)
-        assert "p.webshare.io" in str(fetcher_with_proxy.proxy.url)
-        assert fetcher_with_proxy.proxy.raw_auth == (b"test_user", b"test_pass")
+    async def test_proxy_configuration(self, fetcher: GitHubFetcher):
+        """Test proxy configuration is always set."""
+        assert fetcher.proxy is not None
+        assert isinstance(fetcher.proxy, httpx.Proxy)
+        assert "p.webshare.io" in str(fetcher.proxy.url)
+        assert fetcher.proxy.raw_auth == (b"test_user", b"test_pass")
 
-    async def test_no_proxy_configuration(self, fetcher: GitHubFetcher):
-        """Test fetcher without proxy has no proxy configuration."""
-        assert fetcher.proxy is None
+    async def test_proxy_error_provides_actionable_message(
+        self, fetcher: GitHubFetcher, httpx_mock: HTTPXMock
+    ):
+        """Test that proxy errors include guidance about env vars."""
+        httpx_mock.add_exception(httpx.ProxyError("Connection refused"))
+
+        with pytest.raises(httpx.ProxyError, match="WEBSHARE_PROXY_USERNAME"):
+            await fetcher.fetch_repo("python", "cpython")
 
     async def test_retry_on_rate_limit(self, fetcher: GitHubFetcher, httpx_mock: HTTPXMock):
         """Test retry logic on rate limit (403)."""

@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
     NoTranscriptFound,
+    RequestBlocked,
     TranscriptsDisabled,
     VideoUnavailable,
+    YouTubeRequestFailed,
 )
 from youtube_transcript_api.proxies import WebshareProxyConfig
 
@@ -57,16 +59,14 @@ class YouTubeService:
 
     def __init__(
         self,
-        proxy_username: str | None = None,
-        proxy_password: str | None = None,
+        proxy_username: str,
+        proxy_password: str,
     ):
-        """Initialize YouTube service with optional proxy config."""
-        self.proxy_config = None
-        if proxy_username and proxy_password:
-            self.proxy_config = WebshareProxyConfig(
-                proxy_username=proxy_username,
-                proxy_password=proxy_password,
-            )
+        """Initialize YouTube service with Webshare proxy config."""
+        self.proxy_config = WebshareProxyConfig(
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
+        )
 
     def extract_video_id(self, url_or_id: str) -> str:
         """Extract video ID from URL or validate ID.
@@ -107,11 +107,7 @@ class YouTubeService:
             languages = ["en"]
 
         try:
-            # Create API instance with optional proxy config
-            if self.proxy_config:
-                api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
-            else:
-                api = YouTubeTranscriptApi()
+            api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
             fetched = api.fetch(video_id, languages=tuple(languages))
 
             segments = [
@@ -129,6 +125,20 @@ class YouTubeService:
                 language=languages[0] if languages else "en",
             )
 
+        except RequestBlocked as e:
+            raise ValueError(
+                f"YouTube is blocking requests for video {video_id} despite using "
+                f"Webshare proxy. Ensure you have purchased 'Residential' proxies "
+                f"(not 'Proxy Server' or 'Static Residential'). "
+                f"Check WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD in .env. "
+                f"Original error: {e}"
+            ) from e
+        except YouTubeRequestFailed as e:
+            raise ValueError(
+                f"YouTube request failed for video {video_id}. This may indicate a "
+                f"proxy connection issue. Check WEBSHARE_PROXY_USERNAME and "
+                f"WEBSHARE_PROXY_PASSWORD in .env. Original error: {e}"
+            ) from e
         except VideoUnavailable as e:
             raise ValueError(f"Video unavailable: {video_id}") from e
         except TranscriptsDisabled as e:
