@@ -19,6 +19,7 @@ async def health():
         "status": "ok",
         "git_sha": os.environ.get("GIT_SHA", "unknown"),
         "build_date": os.environ.get("BUILD_DATE", "unknown"),
+        "app_version": settings.app_version,
     }
 
 

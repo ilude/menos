@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     entity_extraction_provider: LLMProviderType = "openrouter"
     entity_extraction_model: str = ""
 
+    # Unified Pipeline
+    unified_pipeline_enabled: bool = True
+    unified_pipeline_provider: LLMProviderType = "openrouter"
+    unified_pipeline_model: str = ""
+    unified_pipeline_max_concurrency: int = 4
+
     # Content Classification
     classification_enabled: bool = True
     classification_provider: LLMProviderType = "openrouter"
@@ -83,6 +89,16 @@ class Settings(BaseSettings):
     entity_max_topics_per_content: int = 7
     entity_min_confidence: float = 0.6
     entity_fetch_external_metadata: bool = True
+
+    @property
+    def app_version(self) -> str:
+        """Read app version from pyproject.toml."""
+        import re
+
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        text = pyproject.read_text(encoding="utf-8")
+        match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+        return match.group(1) if match else "unknown"
 
 
 settings = Settings()

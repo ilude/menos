@@ -347,3 +347,45 @@ async def get_agent_service() -> AgentService:
         embedding_service=embedding_service,
         surreal_repo=surreal_repo,
     )
+
+
+@lru_cache(maxsize=1)
+def get_unified_pipeline_provider() -> LLMProvider:
+    """Get singleton unified pipeline LLM provider based on settings.
+
+    Returns:
+        LLMProvider instance configured for unified pipeline
+    """
+    provider_type = settings.unified_pipeline_provider
+    model = settings.unified_pipeline_model
+
+    if provider_type == "ollama":
+        return OllamaLLMProvider(settings.ollama_url, model)
+    elif provider_type == "openai":
+        if not settings.openai_api_key:
+            raise ValueError("openai_api_key must be set for openai unified pipeline provider")
+        return OpenAIProvider(settings.openai_api_key, model)
+    elif provider_type == "anthropic":
+        if not settings.anthropic_api_key:
+            msg = "anthropic_api_key must be set for anthropic unified pipeline provider"
+            raise ValueError(msg)
+        return AnthropicProvider(settings.anthropic_api_key, model)
+    elif provider_type == "openrouter":
+        return build_openrouter_chain(model)
+    elif provider_type == "none":
+        return NoOpLLMProvider()
+    else:
+        raise ValueError(f"Unknown unified pipeline provider: {provider_type}")
+
+
+async def get_unified_pipeline_service():
+    """Get UnifiedPipelineService instance for dependency injection."""
+    from menos.services.unified_pipeline import UnifiedPipelineService
+
+    provider = get_unified_pipeline_provider()
+    repo = await get_surreal_repo()
+    return UnifiedPipelineService(
+        llm_provider=provider,
+        repo=repo,
+        settings=settings,
+    )
