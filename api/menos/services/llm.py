@@ -128,14 +128,3 @@ class OllamaLLMProvider:
         if self.client is not None:
             await self.client.aclose()
             self.client = None
-
-
-# Backward compatibility alias
-LLMService = OllamaLLMProvider
-
-
-def get_llm_service() -> LLMProvider:
-    """Get LLM service instance for dependency injection (summary generation)."""
-    from menos.services.di import build_openrouter_chain
-
-    return build_openrouter_chain()

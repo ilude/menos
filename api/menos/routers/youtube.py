@@ -19,7 +19,6 @@ from menos.services.di import (
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
-from menos.services.llm import LLMService, get_llm_service
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 from menos.services.youtube import YouTubeService, get_youtube_service
 from menos.services.youtube_metadata import (
@@ -59,7 +58,6 @@ class YouTubeIngestResponse(BaseModel):
     transcript_length: int
     chunks_created: int
     file_path: str
-    summary: str | None = None
     classification_status: str | None = None
 
 
@@ -95,7 +93,6 @@ async def ingest_video(
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
-    llm_service: LLMService = Depends(get_llm_service),
     metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
     classification_service: ClassificationService = Depends(get_classification_service),
 ):
@@ -170,7 +167,6 @@ async def ingest_video(
         "author": key_id,
         "created_at": created.created_at.isoformat() if created.created_at else None,
         "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
-        "summary_model": getattr(llm_service, "model", "unknown"),
     }
     metadata_json = json.dumps(metadata_dict, indent=2)
     await minio_storage.upload(
@@ -200,53 +196,6 @@ async def ingest_video(
             await surreal_repo.create_chunk(chunk)
             chunks_created += 1
 
-    # Generate summary using LLM
-    summary = None
-    summary_path = f"youtube/{video_id}/summary.md"
-    try:
-        # Build context from metadata
-        title_text = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
-        description_text = (
-            yt_metadata.description[:1000]
-            if yt_metadata and yt_metadata.description
-            else ""
-        )
-        channel_text = yt_metadata.channel_title if yt_metadata else "Unknown"
-        links_text = (
-            "\n".join(yt_metadata.description_urls[:10])
-            if yt_metadata and yt_metadata.description_urls
-            else "None"
-        )
-
-        # Truncate transcript if too long (qwen3 context limit)
-        transcript_for_summary = transcript.full_text[:12000]
-        summary_prompt = f"""Summarize this YouTube video:
-
-**Title:** {title_text}
-**Channel:** {channel_text}
-**Description:** {description_text}
-
-**Links from description:**
-{links_text}
-
-**Transcript:**
-{transcript_for_summary}
-
-Provide:
-1. A 2-3 sentence overview
-2. 3-5 bullet points of main topics covered
-3. 2-3 notable timestamps with what's discussed
-4. Any relevant links from the description that relate to the content"""
-
-        summary = await llm_service.generate(summary_prompt)
-
-        # Store summary in MinIO
-        summary_data = io.BytesIO(summary.encode("utf-8"))
-        await minio_storage.upload(summary_path, summary_data, "text/markdown")
-        logger.info(f"Summary generated and stored for video {video_id}")
-    except Exception as e:
-        logger.warning(f"Failed to generate summary for {video_id}: {e}")
-
     # Launch classification as fire-and-forget background task
     classification_status = None
     min_len = classification_service.settings.classification_min_content_length
@@ -266,21 +215,23 @@ Provide:
                     await surreal_repo.update_content_classification(
                         content_id, result.model_dump()
                     )
+                    if result.summary:
+                        summary_path = f"youtube/{video_id}/summary.md"
+                        summary_data = io.BytesIO(result.summary.encode("utf-8"))
+                        await minio_storage.upload(summary_path, summary_data, "text/markdown")
                     logger.info(
                         "Classification complete for %s: tier=%s score=%d",
-                        content_id, result.tier, result.quality_score,
+                        content_id,
+                        result.tier,
+                        result.quality_score,
                     )
                 else:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
+                    await surreal_repo.update_content_classification_status(content_id, "failed")
                     logger.warning("Classification returned no result for %s", content_id)
             except asyncio.CancelledError:
                 logger.warning("Classification cancelled for %s (shutdown?)", content_id)
                 try:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
+                    await surreal_repo.update_content_classification_status(content_id, "failed")
                 except Exception:
                     pass
                 raise
@@ -289,13 +240,12 @@ Provide:
                     "Background classification failed for %s: %s", content_id, e, exc_info=True
                 )
                 try:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
+                    await surreal_repo.update_content_classification_status(content_id, "failed")
                 except Exception as inner_e:
                     logger.error(
                         "Failed to mark classification as failed for %s: %s",
-                        content_id, inner_e,
+                        content_id,
+                        inner_e,
                     )
 
         task = asyncio.create_task(_classify_background())
@@ -309,7 +259,6 @@ Provide:
         transcript_length=len(transcript.full_text),
         chunks_created=chunks_created,
         file_path=file_path,
-        summary=summary,
         classification_status=classification_status,
     )
 
@@ -416,21 +365,23 @@ async def upload_transcript(
                     await surreal_repo.update_content_classification(
                         content_id, result.model_dump()
                     )
+                    if result.summary:
+                        summary_path = f"youtube/{video_id}/summary.md"
+                        summary_data = io.BytesIO(result.summary.encode("utf-8"))
+                        await minio_storage.upload(summary_path, summary_data, "text/markdown")
                     logger.info(
                         "Classification complete for %s: tier=%s score=%d",
-                        content_id, result.tier, result.quality_score,
+                        content_id,
+                        result.tier,
+                        result.quality_score,
                     )
                 else:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
+                    await surreal_repo.update_content_classification_status(content_id, "failed")
                     logger.warning("Classification returned no result for %s", content_id)
             except asyncio.CancelledError:
                 logger.warning("Classification cancelled for %s (shutdown?)", content_id)
                 try:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
+                    await surreal_repo.update_content_classification_status(content_id, "failed")
                 except Exception:
                     pass
                 raise
@@ -439,13 +390,12 @@ async def upload_transcript(
                     "Background classification failed for %s: %s", content_id, e, exc_info=True
                 )
                 try:
-                    await surreal_repo.update_content_classification_status(
-                        content_id, "failed"
-                    )
+                    await surreal_repo.update_content_classification_status(content_id, "failed")
                 except Exception as inner_e:
                     logger.error(
                         "Failed to mark classification as failed for %s: %s",
-                        content_id, inner_e,
+                        content_id,
+                        inner_e,
                     )
 
         task = asyncio.create_task(_classify_background())

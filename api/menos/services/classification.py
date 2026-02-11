@@ -39,6 +39,7 @@ Channels: {interest_channels}
 - Assign a quality score from 1-100 where 50 = average, 80+ = exceptional, <30 = low value
 - Bias ratings toward the user's interest profile above
 - Provide brief explanations (2-3 bullet points each)
+- Generate a summary: a 2-3 sentence overview followed by 3-5 bullet points of main topics
 
 ## CALIBRATION
 - Score 50 = average content with moderate relevance
@@ -58,7 +59,8 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
   "tier": "B",
   "tier_explanation": ["Reason 1", "Reason 2"],
   "quality_score": 55,
-  "score_explanation": ["Reason 1", "Reason 2"]
+  "score_explanation": ["Reason 1", "Reason 2"],
+  "summary": "2-3 sentence overview.\\n\\n- Bullet point 1\\n- Bullet point 2\\n- Bullet point 3"
 }}"""
 
 
@@ -235,14 +237,10 @@ class ClassificationService:
 
         # Build prompt
         prompt = CLASSIFICATION_PROMPT_TEMPLATE.format(
-            existing_labels=(
-                ", ".join(existing_labels[:50]) if existing_labels else "None yet"
-            ),
+            existing_labels=(", ".join(existing_labels[:50]) if existing_labels else "None yet"),
             interest_topics=", ".join(interests.get("topics", [])) or "None yet",
             interest_tags=", ".join(interests.get("tags", [])) or "None yet",
-            interest_channels=(
-                ", ".join(interests.get("channels", [])) or "None yet"
-            ),
+            interest_channels=(", ".join(interests.get("channels", [])) or "None yet"),
             max_new_labels=self.settings.classification_max_new_labels,
             content_text=truncated,
         )
@@ -252,7 +250,7 @@ class ClassificationService:
             response = await self.llm.generate(
                 prompt,
                 temperature=0.3,
-                max_tokens=2000,
+                max_tokens=3000,
                 timeout=60.0,
             )
         except Exception as e:
@@ -313,10 +311,7 @@ class ClassificationService:
         raw_labels = data.get("labels", [])
         if not isinstance(raw_labels, list):
             raw_labels = []
-        labels = [
-            lbl for lbl in raw_labels
-            if isinstance(lbl, str) and LABEL_PATTERN.match(lbl)
-        ]
+        labels = [lbl for lbl in raw_labels if isinstance(lbl, str) and LABEL_PATTERN.match(lbl)]
 
         # Process new labels with deterministic dedup
         raw_new_labels = data.get("new_labels", [])
@@ -354,10 +349,16 @@ class ClassificationService:
             score_explanation = []
         score_explanation = [str(e) for e in score_explanation if e]
 
+        # Extract summary
+        summary = data.get("summary", "")
+        if not isinstance(summary, str):
+            summary = ""
+
         return ClassificationResult(
             labels=labels,
             tier=tier,
             tier_explanation=tier_explanation,
             quality_score=score,
             score_explanation=score_explanation,
+            summary=summary,
         )

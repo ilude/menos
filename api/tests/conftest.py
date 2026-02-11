@@ -21,7 +21,6 @@ from menos.services.di import (
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
-from menos.services.llm import get_llm_service
 from menos.services.youtube import get_youtube_service
 from menos.services.youtube_metadata import get_youtube_metadata_service
 
@@ -132,15 +131,6 @@ def mock_metadata_service():
 
 
 @pytest.fixture
-def mock_llm_service():
-    """Mock LLM service."""
-    service = MagicMock()
-    service.generate = AsyncMock(return_value="Test summary")
-    service.model = "test-model"
-    return service
-
-
-@pytest.fixture
 def mock_classification_service():
     """Mock classification service."""
     service = MagicMock()
@@ -152,19 +142,26 @@ def mock_classification_service():
 
 @pytest.fixture
 def app_with_keys(
-    keys_dir, monkeypatch, mock_surreal_repo, mock_embedding_service,
-    mock_minio_storage, mock_youtube_service, mock_metadata_service,
-    mock_llm_service, mock_classification_service,
+    keys_dir,
+    monkeypatch,
+    mock_surreal_repo,
+    mock_embedding_service,
+    mock_minio_storage,
+    mock_youtube_service,
+    mock_metadata_service,
+    mock_classification_service,
 ):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
 
     # Reset the key store singleton
     import menos.auth.dependencies as deps
+
     deps._key_store = None
 
     # Reload settings with new env
     from menos.config import Settings
+
     monkeypatch.setattr("menos.config.settings", Settings())
     monkeypatch.setattr("menos.auth.dependencies.settings", Settings())
 
@@ -176,7 +173,6 @@ def app_with_keys(
     app.dependency_overrides[get_minio_storage] = lambda: mock_minio_storage
     app.dependency_overrides[get_youtube_service] = lambda: mock_youtube_service
     app.dependency_overrides[get_youtube_metadata_service] = lambda: mock_metadata_service
-    app.dependency_overrides[get_llm_service] = lambda: mock_llm_service
     app.dependency_overrides[get_classification_service] = lambda: mock_classification_service
 
     yield app
@@ -210,6 +206,7 @@ class AuthedTestClient:
         sign_path = path
         if params:
             from urllib.parse import urlencode
+
             query_string = urlencode(params)
             sign_path = f"{path}?{query_string}"
 
@@ -221,6 +218,7 @@ class AuthedTestClient:
         body = kwargs.get("content") or b""
         if kwargs.get("json"):
             import json
+
             body = json.dumps(kwargs["json"]).encode()
             # TestClient needs content, not json, when we provide content-digest
             kwargs["content"] = body

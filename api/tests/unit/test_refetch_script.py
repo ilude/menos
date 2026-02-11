@@ -97,17 +97,7 @@ def mock_metadata_service():
 
 
 @pytest.fixture
-def mock_llm_service():
-    """Mock LLMService."""
-    svc = MagicMock()
-    svc.generate = AsyncMock(return_value="# Summary\nThis is a summary.")
-    return svc
-
-
-@pytest.fixture
-def patched_refetch(
-    mock_minio, mock_surreal, mock_settings, mock_metadata_service, mock_llm_service
-):
+def patched_refetch(mock_minio, mock_surreal, mock_settings, mock_metadata_service):
     """Patch all external deps for refetch_all and return mocks dict."""
 
     @contextlib.asynccontextmanager
@@ -117,14 +107,12 @@ def patched_refetch(
     with (
         patch(f"{MODULE}.get_storage_context", mock_storage_context),
         patch(f"{MODULE}.YouTubeMetadataService", return_value=mock_metadata_service),
-        patch(f"{MODULE}.build_openrouter_chain", return_value=mock_llm_service),
     ):
         yield {
             "minio": mock_minio,
             "surreal": mock_surreal,
             "settings": mock_settings,
             "metadata_service": mock_metadata_service,
-            "llm_service": mock_llm_service,
         }
 
 
@@ -148,7 +136,7 @@ class TestRefetchAll:
         await refetch_all()
 
         assert mocks["metadata_service"].fetch_metadata.call_count == 2
-        assert mocks["minio"].upload.call_count == 4  # 2 metadata + 2 summary
+        assert mocks["minio"].upload.call_count == 2  # 2 metadata.json
         assert mocks["surreal"].db.query.call_count == 2
 
     @pytest.mark.asyncio
@@ -172,17 +160,13 @@ class TestRefetchAll:
         mocks = patched_refetch
         item = make_content_item(video_id="xyzABC123_0")
         mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["metadata_service"].fetch_metadata.return_value = (
-            make_yt_metadata("xyzABC123_0")
-        )
+        mocks["metadata_service"].fetch_metadata.return_value = make_yt_metadata("xyzABC123_0")
 
         from scripts.refetch_metadata import refetch_all
 
         await refetch_all()
 
-        mocks["metadata_service"].fetch_metadata.assert_called_once_with(
-            "xyzABC123_0"
-        )
+        mocks["metadata_service"].fetch_metadata.assert_called_once_with("xyzABC123_0")
 
     @pytest.mark.asyncio
     async def test_handles_metadata_fetch_failure(self, patched_refetch, caplog):
@@ -190,9 +174,7 @@ class TestRefetchAll:
         mocks = patched_refetch
         item = make_content_item()
         mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["metadata_service"].fetch_metadata.side_effect = ValueError(
-            "API error"
-        )
+        mocks["metadata_service"].fetch_metadata.side_effect = ValueError("API error")
 
         from scripts.refetch_metadata import refetch_all
 
@@ -208,17 +190,13 @@ class TestRefetchAll:
         mocks = patched_refetch
         item = make_content_item(video_id="tr_TEST")
         mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["metadata_service"].fetch_metadata.return_value = (
-            make_yt_metadata("tr_TEST")
-        )
+        mocks["metadata_service"].fetch_metadata.return_value = make_yt_metadata("tr_TEST")
 
         from scripts.refetch_metadata import refetch_all
 
         await refetch_all()
 
-        mocks["minio"].download.assert_called_once_with(
-            "youtube/tr_TEST/transcript.txt"
-        )
+        mocks["minio"].download.assert_called_once_with("youtube/tr_TEST/transcript.txt")
 
     @pytest.mark.asyncio
     async def test_handles_transcript_read_failure(self, patched_refetch, caplog):
@@ -242,9 +220,7 @@ class TestRefetchAll:
         mocks = patched_refetch
         item = make_content_item(video_id="up_META")
         mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["metadata_service"].fetch_metadata.return_value = (
-            make_yt_metadata("up_META")
-        )
+        mocks["metadata_service"].fetch_metadata.return_value = make_yt_metadata("up_META")
 
         from scripts.refetch_metadata import refetch_all
 
@@ -304,59 +280,6 @@ class TestRefetchAll:
         assert data["channel_title"] == yt.channel_title
 
     @pytest.mark.asyncio
-    async def test_generates_summary_via_llm(self, patched_refetch):
-        """LLM generate should be called with a prompt."""
-        mocks = patched_refetch
-        item = make_content_item()
-        mocks["surreal"].list_content.return_value = ([item], 1)
-
-        from scripts.refetch_metadata import refetch_all
-
-        await refetch_all()
-
-        mocks["llm_service"].generate.assert_called_once()
-        prompt = mocks["llm_service"].generate.call_args[0][0]
-        assert "Summarize this YouTube video" in prompt
-
-    @pytest.mark.asyncio
-    async def test_uploads_summary_to_minio(self, patched_refetch):
-        """summary.md should be uploaded with correct path and type."""
-        mocks = patched_refetch
-        item = make_content_item(video_id="sum_UP")
-        mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["metadata_service"].fetch_metadata.return_value = (
-            make_yt_metadata("sum_UP")
-        )
-
-        from scripts.refetch_metadata import refetch_all
-
-        await refetch_all()
-
-        calls = mocks["minio"].upload.call_args_list
-        summary_call = calls[1]
-        assert summary_call[0][0] == "youtube/sum_UP/summary.md"
-        assert summary_call[0][2] == "text/markdown"
-
-    @pytest.mark.asyncio
-    async def test_handles_summary_generation_failure(
-        self, patched_refetch, caplog
-    ):
-        """Summary failure should not prevent SurrealDB title update."""
-        mocks = patched_refetch
-        item = make_content_item()
-        mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["llm_service"].generate.side_effect = Exception("LLM timeout")
-
-        from scripts.refetch_metadata import refetch_all
-
-        with caplog.at_level(logging.ERROR):
-            await refetch_all()
-
-        assert "Failed to generate summary" in caplog.text
-        # SurrealDB update should still happen
-        mocks["surreal"].db.query.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_updates_title_in_surrealdb(self, patched_refetch):
         """surreal.db.query should be called with UPDATE statement."""
         mocks = patched_refetch
@@ -375,9 +298,7 @@ class TestRefetchAll:
         )
 
     @pytest.mark.asyncio
-    async def test_handles_surrealdb_update_failure(
-        self, patched_refetch, caplog
-    ):
+    async def test_handles_surrealdb_update_failure(self, patched_refetch, caplog):
         """SurrealDB update failure should be logged but not crash."""
         mocks = patched_refetch
         item = make_content_item()

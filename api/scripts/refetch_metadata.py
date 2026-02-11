@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Refetch YouTube metadata and regenerate summaries for existing videos."""
+"""Refetch YouTube metadata for existing videos."""
 
 import asyncio
 import io
 import json
 import logging
 
-from menos.services.di import build_openrouter_chain, get_storage_context
+from menos.services.di import get_storage_context
 from menos.services.youtube_metadata import YouTubeMetadataService
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 async def refetch_all():
-    """Refetch metadata and regenerate summaries for all YouTube videos."""
+    """Refetch metadata for all YouTube videos."""
     async with get_storage_context() as (minio, surreal):
         metadata_service = YouTubeMetadataService()
-        llm_service = build_openrouter_chain()
 
         # List all YouTube videos
         items, _ = await surreal.list_content(content_type="youtube", limit=100)
@@ -78,43 +77,6 @@ async def refetch_all():
                 metadata_path, io.BytesIO(metadata_json.encode("utf-8")), "application/json"
             )
             logger.info("  Updated metadata.json")
-
-            # Generate new summary
-            summary_path = f"youtube/{video_id}/summary.md"
-            try:
-                description_text = yt_metadata.description[:1000] if yt_metadata.description else ""
-                links_text = (
-                    "\n".join(yt_metadata.description_urls[:10])
-                    if yt_metadata.description_urls
-                    else "None"
-                )
-                transcript_for_summary = transcript_text[:12000]
-
-                summary_prompt = f"""Summarize this YouTube video:
-
-**Title:** {yt_metadata.title}
-**Channel:** {yt_metadata.channel_title}
-**Description:** {description_text}
-
-**Links from description:**
-{links_text}
-
-**Transcript:**
-{transcript_for_summary}
-
-Provide:
-1. A 2-3 sentence overview
-2. 3-5 bullet points of main topics covered
-3. 2-3 notable timestamps with what's discussed
-4. Any relevant links from the description that relate to the content"""
-
-                summary = await llm_service.generate(summary_prompt)
-                await minio.upload(
-                    summary_path, io.BytesIO(summary.encode("utf-8")), "text/markdown"
-                )
-                logger.info("  Regenerated summary.md")
-            except Exception as e:
-                logger.error(f"  Failed to generate summary: {e}")
 
             # Update title in SurrealDB
             try:

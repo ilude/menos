@@ -145,12 +145,13 @@ class ExtractionMetrics(BaseModel):
 
 
 class ClassificationResult(BaseModel):
-    """Result of content classification (quality tier + labels)."""
+    """Result of content classification (quality tier + labels + summary)."""
 
     labels: list[str] = Field(default_factory=list)
     tier: str = ""  # S, A, B, C, D
     tier_explanation: list[str] = Field(default_factory=list)
     quality_score: int = 0  # 1-100
     score_explanation: list[str] = Field(default_factory=list)
+    summary: str = ""
     model: str = ""
     classified_at: str = ""

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from menos.services.llm import LLMProvider, LLMService, OllamaLLMProvider
+from menos.services.llm import LLMProvider, OllamaLLMProvider
 
 
 class TestLLMProtocol:
@@ -15,10 +15,6 @@ class TestLLMProtocol:
         """OllamaLLMProvider satisfies the LLMProvider protocol."""
         provider = OllamaLLMProvider("http://localhost:11434", "test-model")
         assert isinstance(provider, LLMProvider)
-
-    def test_llm_service_alias(self):
-        """LLMService is a backward-compatibility alias for OllamaLLMProvider."""
-        assert LLMService is OllamaLLMProvider
 
 
 class TestOllamaLLMProviderInit:

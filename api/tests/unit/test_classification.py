@@ -31,14 +31,19 @@ def mock_llm_provider():
     """Create mock LLM provider."""
     provider = MagicMock()
     provider.model = "test-model"
-    provider.generate = AsyncMock(return_value=json.dumps({
-        "labels": ["programming", "kubernetes"],
-        "new_labels": ["homelab"],
-        "tier": "A",
-        "tier_explanation": ["Rich technical content", "Relevant to interests"],
-        "quality_score": 78,
-        "score_explanation": ["Novel approach", "High density"],
-    }))
+    provider.generate = AsyncMock(
+        return_value=json.dumps(
+            {
+                "labels": ["programming", "kubernetes"],
+                "new_labels": ["homelab"],
+                "tier": "A",
+                "tier_explanation": ["Rich technical content", "Relevant to interests"],
+                "quality_score": 78,
+                "score_explanation": ["Novel approach", "High density"],
+                "summary": "A deep dive into Kubernetes.\n\n- Topic 1\n- Topic 2\n- Topic 3",
+            }
+        )
+    )
     return provider
 
 
@@ -46,11 +51,13 @@ def mock_llm_provider():
 def mock_interest_provider():
     """Create mock interest provider."""
     provider = MagicMock()
-    provider.get_interests = AsyncMock(return_value={
-        "topics": ["Kubernetes", "Python"],
-        "tags": ["devops", "programming"],
-        "channels": ["TechChannel"],
-    })
+    provider.get_interests = AsyncMock(
+        return_value={
+            "topics": ["Kubernetes", "Python"],
+            "tags": ["devops", "programming"],
+            "channels": ["TechChannel"],
+        }
+    )
     return provider
 
 
@@ -58,16 +65,20 @@ def mock_interest_provider():
 def mock_repo():
     """Create mock SurrealDB repository."""
     repo = MagicMock()
-    repo.list_tags_with_counts = AsyncMock(return_value=[
-        {"name": "programming", "count": 10},
-        {"name": "kubernetes", "count": 5},
-        {"name": "devops", "count": 3},
-    ])
-    repo.get_interest_profile = AsyncMock(return_value={
-        "topics": ["Kubernetes"],
-        "tags": ["devops"],
-        "channels": ["TechChannel"],
-    })
+    repo.list_tags_with_counts = AsyncMock(
+        return_value=[
+            {"name": "programming", "count": 10},
+            {"name": "kubernetes", "count": 5},
+            {"name": "devops", "count": 3},
+        ]
+    )
+    repo.get_interest_profile = AsyncMock(
+        return_value={
+            "topics": ["Kubernetes"],
+            "tags": ["devops"],
+            "channels": ["TechChannel"],
+        }
+    )
     return repo
 
 
@@ -191,22 +202,61 @@ class TestHappyPath:
         assert result is not None
         assert "homelab" in result.labels
 
+    @pytest.mark.asyncio
+    async def test_summary_parsed(self, classification_service):
+        result = await classification_service.classify_content(
+            content_id="test-1",
+            content_text="x" * 1000,
+            content_type="youtube",
+            title="Test Video",
+        )
+        assert result is not None
+        assert "Kubernetes" in result.summary
+        assert "- Topic 1" in result.summary
+
+    @pytest.mark.asyncio
+    async def test_missing_summary_defaults_to_empty(
+        self, classification_service, mock_llm_provider
+    ):
+        mock_llm_provider.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "labels": ["programming"],
+                    "new_labels": [],
+                    "tier": "B",
+                    "tier_explanation": [],
+                    "quality_score": 50,
+                    "score_explanation": [],
+                }
+            )
+        )
+        result = await classification_service.classify_content(
+            content_id="test-1",
+            content_text="x" * 1000,
+            content_type="youtube",
+            title="Test",
+        )
+        assert result is not None
+        assert result.summary == ""
+
 
 class TestTierValidation:
     """Test tier validation."""
 
     @pytest.mark.asyncio
-    async def test_invalid_tier_defaults_to_c(
-        self, classification_service, mock_llm_provider
-    ):
-        mock_llm_provider.generate = AsyncMock(return_value=json.dumps({
-            "labels": [],
-            "new_labels": [],
-            "tier": "X",
-            "tier_explanation": [],
-            "quality_score": 50,
-            "score_explanation": [],
-        }))
+    async def test_invalid_tier_defaults_to_c(self, classification_service, mock_llm_provider):
+        mock_llm_provider.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "labels": [],
+                    "new_labels": [],
+                    "tier": "X",
+                    "tier_explanation": [],
+                    "quality_score": 50,
+                    "score_explanation": [],
+                }
+            )
+        )
         result = await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -217,18 +267,20 @@ class TestTierValidation:
         assert result.tier == "C"
 
     @pytest.mark.asyncio
-    async def test_all_valid_tiers_accepted(
-        self, classification_service, mock_llm_provider
-    ):
+    async def test_all_valid_tiers_accepted(self, classification_service, mock_llm_provider):
         for tier in ["S", "A", "B", "C", "D"]:
-            mock_llm_provider.generate = AsyncMock(return_value=json.dumps({
-                "labels": [],
-                "new_labels": [],
-                "tier": tier,
-                "tier_explanation": [],
-                "quality_score": 50,
-                "score_explanation": [],
-            }))
+            mock_llm_provider.generate = AsyncMock(
+                return_value=json.dumps(
+                    {
+                        "labels": [],
+                        "new_labels": [],
+                        "tier": tier,
+                        "tier_explanation": [],
+                        "quality_score": 50,
+                        "score_explanation": [],
+                    }
+                )
+            )
             result = await classification_service.classify_content(
                 content_id="test-1",
                 content_text="x" * 1000,
@@ -243,17 +295,19 @@ class TestScoreClamping:
     """Test quality score clamping."""
 
     @pytest.mark.asyncio
-    async def test_score_clamped_to_100(
-        self, classification_service, mock_llm_provider
-    ):
-        mock_llm_provider.generate = AsyncMock(return_value=json.dumps({
-            "labels": [],
-            "new_labels": [],
-            "tier": "S",
-            "tier_explanation": [],
-            "quality_score": 150,
-            "score_explanation": [],
-        }))
+    async def test_score_clamped_to_100(self, classification_service, mock_llm_provider):
+        mock_llm_provider.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "labels": [],
+                    "new_labels": [],
+                    "tier": "S",
+                    "tier_explanation": [],
+                    "quality_score": 150,
+                    "score_explanation": [],
+                }
+            )
+        )
         result = await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -264,17 +318,19 @@ class TestScoreClamping:
         assert result.quality_score == 100
 
     @pytest.mark.asyncio
-    async def test_score_clamped_to_1(
-        self, classification_service, mock_llm_provider
-    ):
-        mock_llm_provider.generate = AsyncMock(return_value=json.dumps({
-            "labels": [],
-            "new_labels": [],
-            "tier": "D",
-            "tier_explanation": [],
-            "quality_score": -5,
-            "score_explanation": [],
-        }))
+    async def test_score_clamped_to_1(self, classification_service, mock_llm_provider):
+        mock_llm_provider.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "labels": [],
+                    "new_labels": [],
+                    "tier": "D",
+                    "tier_explanation": [],
+                    "quality_score": -5,
+                    "score_explanation": [],
+                }
+            )
+        )
         result = await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -289,12 +345,8 @@ class TestLLMErrorHandling:
     """Test LLM error handling."""
 
     @pytest.mark.asyncio
-    async def test_llm_error_returns_none(
-        self, classification_service, mock_llm_provider
-    ):
-        mock_llm_provider.generate = AsyncMock(
-            side_effect=RuntimeError("LLM connection failed")
-        )
+    async def test_llm_error_returns_none(self, classification_service, mock_llm_provider):
+        mock_llm_provider.generate = AsyncMock(side_effect=RuntimeError("LLM connection failed"))
         result = await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -304,9 +356,7 @@ class TestLLMErrorHandling:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_invalid_json_returns_none(
-        self, classification_service, mock_llm_provider
-    ):
+    async def test_invalid_json_returns_none(self, classification_service, mock_llm_provider):
         mock_llm_provider.generate = AsyncMock(return_value="not json at all }{")
         result = await classification_service.classify_content(
             content_id="test-1",
@@ -343,18 +393,20 @@ class TestDeterministicDedup:
         assert match == "programming"
 
     @pytest.mark.asyncio
-    async def test_dedup_integrated_in_service(
-        self, classification_service, mock_llm_provider
-    ):
+    async def test_dedup_integrated_in_service(self, classification_service, mock_llm_provider):
         """new_labels with close match to existing get mapped."""
-        mock_llm_provider.generate = AsyncMock(return_value=json.dumps({
-            "labels": ["programming"],
-            "new_labels": ["programing"],  # One letter off
-            "tier": "B",
-            "tier_explanation": [],
-            "quality_score": 50,
-            "score_explanation": [],
-        }))
+        mock_llm_provider.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "labels": ["programming"],
+                    "new_labels": ["programing"],  # One letter off
+                    "tier": "B",
+                    "tier_explanation": [],
+                    "quality_score": 50,
+                    "score_explanation": [],
+                }
+            )
+        )
         result = await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -370,17 +422,19 @@ class TestLabelValidation:
     """Test label format validation."""
 
     @pytest.mark.asyncio
-    async def test_invalid_labels_filtered(
-        self, classification_service, mock_llm_provider
-    ):
-        mock_llm_provider.generate = AsyncMock(return_value=json.dumps({
-            "labels": ["valid-label", "UPPERCASE", "has spaces", "123start", "ok"],
-            "new_labels": [],
-            "tier": "B",
-            "tier_explanation": [],
-            "quality_score": 50,
-            "score_explanation": [],
-        }))
+    async def test_invalid_labels_filtered(self, classification_service, mock_llm_provider):
+        mock_llm_provider.generate = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "labels": ["valid-label", "UPPERCASE", "has spaces", "123start", "ok"],
+                    "new_labels": [],
+                    "tier": "B",
+                    "tier_explanation": [],
+                    "quality_score": 50,
+                    "score_explanation": [],
+                }
+            )
+        )
         result = await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -404,9 +458,7 @@ class TestContentDelimiters:
         assert "</CONTENT>" in CLASSIFICATION_PROMPT_TEMPLATE
 
     @pytest.mark.asyncio
-    async def test_prompt_contains_content_tags(
-        self, classification_service, mock_llm_provider
-    ):
+    async def test_prompt_contains_content_tags(self, classification_service, mock_llm_provider):
         await classification_service.classify_content(
             content_id="test-1",
             content_text="x" * 1000,
@@ -484,3 +536,4 @@ class TestClassificationResult:
         assert result.labels == []
         assert result.tier == ""
         assert result.quality_score == 0
+        assert result.summary == ""

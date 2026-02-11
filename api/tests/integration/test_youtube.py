@@ -188,9 +188,7 @@ class TestYouTubeChannelsEndpoint:
             created_at=datetime.now(UTC),
         )
 
-        mock_surreal_repo.list_content = AsyncMock(
-            return_value=([video1, video2, video3], 3)
-        )
+        mock_surreal_repo.list_content = AsyncMock(return_value=([video1, video2, video3], 3))
 
         response = authed_client.get("/api/v1/youtube/channels")
 
@@ -317,9 +315,7 @@ class TestYouTubeChannelsEndpoint:
             created_at=datetime.now(UTC),
         )
 
-        mock_surreal_repo.list_content = AsyncMock(
-            return_value=([video1, video2], 2)
-        )
+        mock_surreal_repo.list_content = AsyncMock(return_value=([video1, video2], 2))
 
         response = authed_client.get("/api/v1/youtube/channels")
 
@@ -358,9 +354,7 @@ class TestYouTubeChannelsEndpoint:
             created_at=datetime.now(UTC),
         )
 
-        mock_surreal_repo.list_content = AsyncMock(
-            return_value=([video1], 1)
-        )
+        mock_surreal_repo.list_content = AsyncMock(return_value=([video1], 1))
 
         response = authed_client.get("/api/v1/youtube/channels")
 
@@ -373,9 +367,13 @@ class TestYouTubeTags:
     """Tests for YouTube tags storage in database."""
 
     def test_ingest_video_stores_youtube_tags(
-        self, authed_client, mock_surreal_repo, mock_youtube_service,
-        mock_metadata_service, mock_minio_storage,
-        mock_embedding_service, mock_llm_service,
+        self,
+        authed_client,
+        mock_surreal_repo,
+        mock_youtube_service,
+        mock_metadata_service,
+        mock_minio_storage,
+        mock_embedding_service,
     ):
         """Test that YouTube video tags are stored in ContentMetadata.tags during ingest."""
         from menos.services.youtube_metadata import YouTubeMetadata
@@ -450,9 +448,13 @@ class TestYouTubeTags:
         assert metadata_arg.tags == ["python", "tutorial", "beginner"]
 
     def test_ingest_video_stores_empty_tags_when_no_metadata(
-        self, authed_client, mock_surreal_repo, mock_youtube_service,
-        mock_metadata_service, mock_minio_storage,
-        mock_embedding_service, mock_llm_service,
+        self,
+        authed_client,
+        mock_surreal_repo,
+        mock_youtube_service,
+        mock_metadata_service,
+        mock_minio_storage,
+        mock_embedding_service,
     ):
         """Test that empty tags list is stored when YouTube metadata cannot be fetched."""
         # Mock transcript response
@@ -503,8 +505,11 @@ class TestYouTubeTags:
         assert metadata_arg.tags == []
 
     def test_upload_transcript_stores_empty_tags(
-        self, authed_client, mock_surreal_repo,
-        mock_minio_storage, mock_embedding_service,
+        self,
+        authed_client,
+        mock_surreal_repo,
+        mock_minio_storage,
+        mock_embedding_service,
     ):
         """Test that upload_transcript stores empty tags list."""
         # Mock storage
