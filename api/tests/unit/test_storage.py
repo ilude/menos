@@ -1969,6 +1969,60 @@ class TestGetGraphData:
         assert len(edges) == 0
 
 
+class TestUpdateContentProcessingStatus:
+    """Tests for update_content_processing_status."""
+
+    @pytest.mark.asyncio
+    async def test_update_content_processing_status(self):
+        """Should write processing_status, processed_at, pipeline_version."""
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+
+        await repo.update_content_processing_status(
+            "c1", "completed", pipeline_version="1.0.0"
+        )
+
+        mock_db.query.assert_called_once()
+        call_args = mock_db.query.call_args[0]
+        assert "processing_status = $status" in call_args[0]
+        assert "processed_at" in call_args[0]
+        assert "pipeline_version = $pipeline_version" in call_args[0]
+        assert call_args[1]["content_id"] == RecordID("content", "c1")
+        assert call_args[1]["status"] == "completed"
+        assert call_args[1]["pipeline_version"] == "1.0.0"
+
+    @pytest.mark.asyncio
+    async def test_update_content_processing_status_without_version(self):
+        """Should work without pipeline_version."""
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+
+        await repo.update_content_processing_status("c1", "processing")
+
+        mock_db.query.assert_called_once()
+        call_args = mock_db.query.call_args[0]
+        assert "processing_status = $status" in call_args[0]
+        assert call_args[1]["status"] == "processing"
+
+    @pytest.mark.asyncio
+    async def test_update_content_processing_result(self):
+        """Should store result dict and set completed status."""
+        mock_db = MagicMock()
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+
+        result_dict = {"tags": ["python"], "tier": "A", "quality_score": 85}
+        await repo.update_content_processing_result("c1", result_dict, "1.0.0")
+
+        mock_db.query.assert_called_once()
+        call_args = mock_db.query.call_args[0]
+        assert "metadata.unified_result = $data" in call_args[0]
+        assert "processing_status = 'completed'" in call_args[0]
+        assert "pipeline_version = $pipeline_version" in call_args[0]
+        assert call_args[1]["content_id"] == RecordID("content", "c1")
+        assert call_args[1]["data"] == result_dict
+        assert call_args[1]["pipeline_version"] == "1.0.0"
+
+
 class TestGetNeighborhood:
     """Tests for get_neighborhood."""
 

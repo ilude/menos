@@ -1,7 +1,7 @@
 ---
 created: 2026-02-11
-completed:
-status: in-progress
+completed: 2026-02-11
+status: completed
 blocked_by:
 parent: plan.md
 ---

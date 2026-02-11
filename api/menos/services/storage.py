@@ -136,11 +136,7 @@ class SurrealDBRepository:
         Returns:
             List of record dictionaries
         """
-        if (
-            not result
-            or not isinstance(result, list)
-            or len(result) == 0
-        ):
+        if not result or not isinstance(result, list) or len(result) == 0:
             return []
         first = result[0]
         if isinstance(first, dict) and "result" in first:
@@ -237,9 +233,7 @@ class SurrealDBRepository:
             Exception: If update fails
         """
         metadata.updated_at = datetime.now(UTC)
-        result = self.db.update(
-            f"content:{content_id}", metadata.model_dump(exclude_none=True)
-        )
+        result = self.db.update(f"content:{content_id}", metadata.model_dump(exclude_none=True))
         if result:
             return self._parse_content(result[0])
         raise RuntimeError(f"Failed to update content {content_id}")
@@ -469,9 +463,7 @@ class SurrealDBRepository:
                 link = self._parse_link(item)
                 # Only include links where both source and target are in node set
                 # (or target is None for unresolved links)
-                if link.source in node_ids and (
-                    link.target is None or link.target in node_ids
-                ):
+                if link.source in node_ids and (link.target is None or link.target in node_ids):
                     edges.append(link)
 
         return nodes, edges
@@ -920,6 +912,72 @@ class SurrealDBRepository:
         )
         raw_items = self._parse_query_result(result)
         return [self._parse_entity(item) for item in raw_items]
+
+    # ==================== Unified Processing Methods ====================
+
+    async def update_content_processing_status(
+        self,
+        content_id: str,
+        status: str,
+        pipeline_version: str | None = None,
+    ) -> None:
+        """Update unified processing status on content.
+
+        Args:
+            content_id: Content ID
+            status: Status string (pending, processing, completed, failed)
+            pipeline_version: Optional pipeline version
+        """
+        params: dict = {
+            "content_id": RecordID("content", content_id),
+            "status": status,
+        }
+        version_clause = ""
+        if pipeline_version:
+            version_clause = "pipeline_version = $pipeline_version,"
+            params["pipeline_version"] = pipeline_version
+
+        self.db.query(
+            f"""
+            UPDATE content SET
+                processing_status = $status,
+                processed_at = time::now(),
+                {version_clause}
+                updated_at = time::now()
+            WHERE id = $content_id
+            """,
+            params,
+        )
+
+    async def update_content_processing_result(
+        self,
+        content_id: str,
+        result_dict: dict,
+        pipeline_version: str,
+    ) -> None:
+        """Store unified pipeline result and set completed status.
+
+        Args:
+            content_id: Content ID
+            result_dict: Pipeline result data
+            pipeline_version: Pipeline version string
+        """
+        self.db.query(
+            """
+            UPDATE content SET
+                metadata.unified_result = $data,
+                processing_status = 'completed',
+                processed_at = time::now(),
+                pipeline_version = $pipeline_version,
+                updated_at = time::now()
+            WHERE id = $content_id
+            """,
+            {
+                "content_id": RecordID("content", content_id),
+                "data": result_dict,
+                "pipeline_version": pipeline_version,
+            },
+        )
 
     # ==================== Classification Methods ====================
 

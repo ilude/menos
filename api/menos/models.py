@@ -36,6 +36,42 @@ class EntitySource(str, Enum):
     API_FETCHED = "api_fetched"
 
 
+class JobStatus(str, Enum):
+    """Status of a pipeline job."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class DataTier(str, Enum):
+    """Data tier for pipeline processing depth."""
+
+    COMPACT = "compact"
+    FULL = "full"
+
+
+class PipelineJob(BaseModel):
+    """A pipeline processing job for the job-first authority model."""
+
+    id: str | None = None
+    resource_key: str
+    content_id: str
+    status: JobStatus = JobStatus.PENDING
+    pipeline_version: str = ""
+    data_tier: DataTier = DataTier.COMPACT
+    idempotency_key: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    error_stage: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class ChunkModel(BaseModel):
     """A chunk of content with embedding."""
 
