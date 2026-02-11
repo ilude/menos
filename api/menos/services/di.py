@@ -218,6 +218,35 @@ def get_reranker() -> RerankerProvider:
 
 
 @lru_cache(maxsize=1)
+def get_entity_extraction_provider() -> LLMProvider:
+    """Get singleton entity extraction LLM provider based on settings.
+
+    Returns:
+        LLMProvider instance configured for entity extraction
+    """
+    provider_type = settings.entity_extraction_provider
+    model = settings.entity_extraction_model
+
+    if provider_type == "ollama":
+        return OllamaLLMProvider(settings.ollama_url, model)
+    elif provider_type == "openai":
+        if not settings.openai_api_key:
+            raise ValueError("openai_api_key must be set for openai entity extraction provider")
+        return OpenAIProvider(settings.openai_api_key, model)
+    elif provider_type == "anthropic":
+        if not settings.anthropic_api_key:
+            msg = "anthropic_api_key must be set for anthropic entity extraction provider"
+            raise ValueError(msg)
+        return AnthropicProvider(settings.anthropic_api_key, model)
+    elif provider_type == "openrouter":
+        return build_openrouter_chain(model)
+    elif provider_type == "none":
+        return NoOpLLMProvider()
+    else:
+        raise ValueError(f"Unknown entity extraction provider: {provider_type}")
+
+
+@lru_cache(maxsize=1)
 def get_classification_provider() -> LLMProvider:
     """Get singleton classification LLM provider based on settings.
 
@@ -261,6 +290,34 @@ async def get_classification_service():
         interest_provider=interest_provider,
         repo=repo,
         settings=settings,
+    )
+
+
+async def get_entity_resolution_service():
+    """Get EntityResolutionService instance for dependency injection."""
+    from menos.services.entity_extraction import EntityExtractionService
+    from menos.services.entity_resolution import EntityResolutionService
+    from menos.services.keyword_matcher import EntityKeywordMatcher
+    from menos.services.sponsored_filter import SponsoredFilter
+    from menos.services.url_detector import URLDetector
+
+    llm_provider = get_entity_extraction_provider()
+    repo = await get_surreal_repo()
+    extraction_service = EntityExtractionService(
+        llm_provider=llm_provider,
+        settings=settings,
+    )
+    keyword_matcher = EntityKeywordMatcher()
+    url_detector = URLDetector()
+    sponsored_filter = SponsoredFilter()
+
+    return EntityResolutionService(
+        repository=repo,
+        extraction_service=extraction_service,
+        keyword_matcher=keyword_matcher,
+        settings=settings,
+        url_detector=url_detector,
+        sponsored_filter=sponsored_filter,
     )
 
 

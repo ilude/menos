@@ -10,15 +10,18 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
+from menos.config import settings
 from menos.models import ChunkModel, ContentMetadata
 from menos.services.chunking import ChunkingService
 from menos.services.classification import ClassificationService
 from menos.services.di import (
     get_classification_service,
+    get_entity_resolution_service,
     get_minio_storage,
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
+from menos.services.entity_resolution import EntityResolutionService
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 from menos.services.youtube import YouTubeService, get_youtube_service
 from menos.services.youtube_metadata import (
@@ -85,6 +88,7 @@ async def ingest_video(
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
     classification_service: ClassificationService = Depends(get_classification_service),
+    entity_resolution_service: EntityResolutionService = Depends(get_entity_resolution_service),
 ):
     """Ingest a YouTube video transcript.
 
@@ -241,6 +245,48 @@ async def ingest_video(
         task = asyncio.create_task(_classify_background())
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
+
+    # Launch entity extraction as fire-and-forget background task
+    if settings.entity_extraction_enabled:
+        description_urls = yt_metadata.description_urls if yt_metadata else []
+        await surreal_repo.update_content_extraction_status(content_id, "pending")
+
+        async def _extract_entities_background():
+            try:
+                await entity_resolution_service.process_content(
+                    content_id=content_id,
+                    content_text=transcript.full_text,
+                    content_type="youtube",
+                    title=video_title,
+                    description_urls=description_urls,
+                )
+                logger.info("Entity extraction complete for %s", content_id)
+            except asyncio.CancelledError:
+                logger.warning("Entity extraction cancelled for %s (shutdown?)", content_id)
+                try:
+                    await surreal_repo.update_content_extraction_status(content_id, "failed")
+                except Exception:
+                    pass
+                raise
+            except Exception as e:
+                logger.error(
+                    "Background entity extraction failed for %s: %s",
+                    content_id,
+                    e,
+                    exc_info=True,
+                )
+                try:
+                    await surreal_repo.update_content_extraction_status(content_id, "failed")
+                except Exception as inner_e:
+                    logger.error(
+                        "Failed to mark entity extraction as failed for %s: %s",
+                        content_id,
+                        inner_e,
+                    )
+
+        ee_task = asyncio.create_task(_extract_entities_background())
+        background_tasks.add(ee_task)
+        ee_task.add_done_callback(background_tasks.discard)
 
     return YouTubeIngestResponse(
         id=content_id,

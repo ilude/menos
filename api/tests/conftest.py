@@ -17,10 +17,12 @@ from fastapi.testclient import TestClient
 from menos.client.signer import RequestSigner
 from menos.services.di import (
     get_classification_service,
+    get_entity_resolution_service,
     get_minio_storage,
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
+from menos.services.entity_resolution import ResolutionResult
 from menos.services.youtube import get_youtube_service
 from menos.services.youtube_metadata import get_youtube_metadata_service
 
@@ -89,6 +91,9 @@ def mock_surreal_repo():
     repo.vector_search = AsyncMock(return_value=[])
     repo.get_graph_data = AsyncMock(return_value=([], []))
     repo.get_neighborhood = AsyncMock(return_value=([], []))
+    repo.update_content_classification_status = AsyncMock()
+    repo.update_content_classification = AsyncMock()
+    repo.update_content_extraction_status = AsyncMock()
     return repo
 
 
@@ -141,6 +146,16 @@ def mock_classification_service():
 
 
 @pytest.fixture
+def mock_entity_resolution_service():
+    """Mock entity resolution service."""
+    service = MagicMock()
+    service.process_content = AsyncMock(
+        return_value=ResolutionResult(edges=[], entities_created=0, entities_reused=0, metrics=None)
+    )
+    return service
+
+
+@pytest.fixture
 def app_with_keys(
     keys_dir,
     monkeypatch,
@@ -150,6 +165,7 @@ def app_with_keys(
     mock_youtube_service,
     mock_metadata_service,
     mock_classification_service,
+    mock_entity_resolution_service,
 ):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
@@ -174,6 +190,7 @@ def app_with_keys(
     app.dependency_overrides[get_youtube_service] = lambda: mock_youtube_service
     app.dependency_overrides[get_youtube_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_classification_service] = lambda: mock_classification_service
+    app.dependency_overrides[get_entity_resolution_service] = lambda: mock_entity_resolution_service
 
     yield app
 
