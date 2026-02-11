@@ -11,8 +11,8 @@ from menos.services.classification import (
     ClassificationService,
     VaultInterestProvider,
     _dedup_label,
-    _extract_json_from_response,
 )
+from menos.services.llm_json import extract_json
 
 
 @pytest.fixture
@@ -500,16 +500,16 @@ class TestJsonExtraction:
     """Test JSON extraction from LLM responses."""
 
     def test_direct_json(self):
-        data = _extract_json_from_response('{"tier": "A"}')
+        data = extract_json('{"tier": "A"}')
         assert data["tier"] == "A"
 
     def test_markdown_code_block(self):
         response = '```json\n{"tier": "B"}\n```'
-        data = _extract_json_from_response(response)
+        data = extract_json(response)
         assert data["tier"] == "B"
 
     def test_invalid_returns_empty(self):
-        data = _extract_json_from_response("not json at all")
+        data = extract_json("not json at all")
         assert data == {}
 
 

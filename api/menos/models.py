@@ -155,3 +155,20 @@ class ClassificationResult(BaseModel):
     summary: str = ""
     model: str = ""
     classified_at: str = ""
+
+
+class UnifiedResult(BaseModel):
+    """Result of unified pipeline (classification + entity extraction in one LLM call)."""
+
+    tags: list[str] = Field(default_factory=list)
+    new_tags: list[str] = Field(default_factory=list)
+    tier: str = ""  # S, A, B, C, D
+    tier_explanation: list[str] = Field(default_factory=list)
+    quality_score: int = 0  # 1-100
+    score_explanation: list[str] = Field(default_factory=list)
+    summary: str = ""
+    topics: list[ExtractedEntity] = Field(default_factory=list)
+    pre_detected_validations: list[PreDetectedValidation] = Field(default_factory=list)
+    additional_entities: list[ExtractedEntity] = Field(default_factory=list)
+    model: str = ""
+    processed_at: str = ""

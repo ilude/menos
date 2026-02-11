@@ -1,6 +1,5 @@
 """Content classification service for quality rating and labeling."""
 
-import json
 import logging
 import re
 import time
@@ -12,6 +11,7 @@ from Levenshtein import distance
 from menos.config import Settings
 from menos.models import ClassificationResult
 from menos.services.llm import LLMProvider
+from menos.services.llm_json import extract_json
 from menos.services.normalization import normalize_name
 from menos.services.storage import SurrealDBRepository
 
@@ -102,40 +102,6 @@ class VaultInterestProvider:
         self._cache = await self.repo.get_interest_profile(top_n=self.top_n)
         self._cache_time = now
         return self._cache
-
-
-def _extract_json_from_response(response: str) -> dict[str, Any]:
-    """Extract JSON from LLM response, handling markdown code blocks.
-
-    Args:
-        response: Raw LLM response
-
-    Returns:
-        Parsed JSON dictionary
-    """
-    response = response.strip()
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        pass
-
-    patterns = [
-        r"```json\s*\n?(.*?)\n?```",
-        r"```\s*\n?(.*?)\n?```",
-        r"\{[\s\S]*\}",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, response, re.DOTALL)
-        if match:
-            try:
-                json_str = match.group(1) if "```" in pattern else match.group(0)
-                return json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                continue
-
-    logger.warning("Failed to parse classification JSON: %s", response[:200])
-    return {}
 
 
 def _dedup_label(
@@ -258,7 +224,7 @@ class ClassificationService:
             return None
 
         # Parse response
-        data = _extract_json_from_response(response)
+        data = extract_json(response)
         if not data:
             logger.warning("Empty classification response for %s", content_id)
             return None

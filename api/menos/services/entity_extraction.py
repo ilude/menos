@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 import time
 from typing import Any
 
@@ -17,6 +16,7 @@ from menos.models import (
     PreDetectedValidation,
 )
 from menos.services.llm import LLMProvider
+from menos.services.llm_json import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -131,43 +131,6 @@ def _entity_type_from_string(type_str: str) -> EntityType:
         "person": EntityType.PERSON,
     }
     return mapping.get(type_str.lower(), EntityType.TOPIC)
-
-
-def _extract_json_from_response(response: str) -> dict[str, Any]:
-    """Extract JSON from LLM response, handling markdown code blocks.
-
-    Args:
-        response: Raw LLM response
-
-    Returns:
-        Parsed JSON dictionary
-    """
-    # Try direct parse first
-    response = response.strip()
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        pass
-
-    # Try to extract from markdown code blocks
-    patterns = [
-        r"```json\s*\n?(.*?)\n?```",
-        r"```\s*\n?(.*?)\n?```",
-        r"\{[\s\S]*\}",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, response, re.DOTALL)
-        if match:
-            try:
-                json_str = match.group(1) if "```" in pattern else match.group(0)
-                return json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                continue
-
-    # Return empty result if parsing fails
-    logger.warning("Failed to parse LLM response as JSON: %s", response[:200])
-    return {"topics": [], "pre_detected_validations": [], "additional_entities": []}
 
 
 class EntityExtractionService:
@@ -320,7 +283,7 @@ class EntityExtractionService:
             return ExtractionResult(), metrics
 
         # Parse response
-        data = _extract_json_from_response(response)
+        data = extract_json(response)
 
         # Convert to ExtractionResult
         result = self._parse_extraction_response(data)
