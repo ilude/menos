@@ -23,6 +23,12 @@ def main():
         help="Path to ed25519 private key (default: ~/.ssh/id_ed25519)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show request details")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30,
+        help="Request timeout in seconds (default: 30)",
+    )
     args = parser.parse_args()
 
     base_url = os.environ.get("SMOKE_TEST_URL", "http://localhost:8000")
@@ -56,7 +62,9 @@ def main():
             print(f"  {k}: {v}", file=sys.stderr)
         print(file=sys.stderr)
 
-    response = httpx.request(method, url, headers=headers, content=body_bytes)
+    response = httpx.request(
+        method, url, headers=headers, content=body_bytes, timeout=args.timeout
+    )
 
     # Print response
     content_type = response.headers.get("content-type", "")
