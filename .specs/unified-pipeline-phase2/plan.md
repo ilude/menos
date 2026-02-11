@@ -1,196 +1,260 @@
 ---
 created: 2026-02-11
 completed:
-status: blocked-by-phase1
+status: ready-for-implementation
+approach: hard-cutover
 ---
 
-# Team Plan: Unified Pipeline — Merge LLM Calls (Phase 2)
-
-## Prerequisites
-- Phase 1 complete: Entity extraction wired into ingestion (`.specs/unified-pipeline-docs/plan.md`)
-- Phase 1 deployed and validated with real content
-- Both classification and entity extraction running as separate background tasks
+# Team Plan: Unified Pipeline Phase 2 (Hard Cutover)
 
 ## Objective
-Merge classification and entity extraction into a single LLM call. Create a unified pipeline service that orchestrates 4 phases (deterministic pre-enrichment, single LLM pass, post-processing, persist). Implement the hybrid knowledge graph model with flat labels for filtering and rich entity nodes for graph traversal.
+Replace the dual-task ingest architecture with one unified pipeline that is clean, traceable, and easy to refine.
 
-## Design Decisions (from brainstorm session 2026-02-11)
+Core outcomes:
+- single ingest execution path
+- single taxonomy term (`tags`)
+- single processing status model
+- async job orchestration with strong observability
 
-These decisions were made during a structured brainstorming session:
+## Out of Scope
+- preserving legacy dual-task compatibility
+- preserving legacy status fields
+- bulk fleet reprocessing strategy (separate plan)
 
-| # | Decision | Rationale |
-|---|----------|-----------|
-| 1 | **Single LLM Pass** | Merge classification (tier, score, summary, labels) and entity extraction (topics, entity validations) into one LLM call. Cost/latency savings: 1 call instead of 2. |
-| 2 | **Hybrid Knowledge Graph** | Flat labels (on content record) for filtering/search + rich entity nodes (Topic, Repo, Paper, Tool with hierarchy) for graph traversal. Two layers, two purposes. |
-| 3 | **Label Seeding** | LLM sees existing labels for vocabulary consistency (prevents "ML" vs "machine-learning" drift). This is NOT scoring bias — just vocabulary control. |
-| 4 | **Link Extraction Before LLM** | Deterministic pre-enrichment (links, URLs, keyword matching) feeds into the LLM call as context. LLM validates pre-detected entities rather than re-extracting. |
-| 5 | **Full Pass Always** | No `classification_min_content_length` gate. Every content item gets the full pipeline regardless of length. |
-| 6 | **Interest Profile = Derived View** | Read-only aggregation of labels + channels. No longer an input to classification (removes circular dependency). `get_interest_profile()` becomes a simple query. |
+## Locked Architecture Decisions
 
-### Approach Selected: B (Single LLM Pass)
-Three approaches were evaluated:
-- A: Sequential (classification first, no interest context) — simplest but labels drift
-- **B: Single LLM Pass** — one combined prompt, cheapest, accepted risk of prompt complexity
-- C: Seeded (lightweight interest context) — best quality but 2 LLM calls
+### A) Core pipeline
+1. Hard cutover: remove legacy dual-task path in this phase.
+2. Unified result persistence is strict all-or-nothing.
+3. `tags` is canonical taxonomy everywhere (replace `labels` terminology).
+4. No rollout feature flag for pipeline path.
 
-### Knowledge Graph Model Selected: C (Hybrid)
-Three models were evaluated:
-- A: Labels as flat graph nodes — simple but no hierarchy
-- B: Unified entities (labels ARE topic entities) — richest but complex
-- **C: Hybrid** — labels for filtering/search + entities for depth. Independent layers, different UX needs.
+### B) Status and authority model
+5. Replace `classification_status` + `entity_extraction_status` with `processing_status` + `processed_at`.
+6. Job-first authority model:
+   - `pipeline_job.status` is authoritative per run
+   - `content.processing_status` is latest content-level projection
+7. `content.processing_status` mirrors full lifecycle: `pending`, `processing`, `completed`, `failed`, `cancelled`.
+8. `processed_at` updates on every state transition ("last status touch").
+9. Timestamp contract:
+   - `pipeline_job.created_at`
+   - `pipeline_job.started_at`
+   - `pipeline_job.finished_at`
+   - `content.processed_at`
 
-## Pipeline Design (4 Phases)
+### C) API and graph contracts
+10. Graph API is hard cutover on existing endpoint: replace `/api/v1/graph` contract directly.
+11. Ingest and reprocess are async job-based and return `job_id` immediately.
+12. Job status endpoint supports tiers:
+   - default minimal
+   - `verbose=true` diagnostics
 
+### D) Reprocessing behavior
+13. Reprocess scope in this phase is one item at a time.
+14. Single-item reprocess must be available via both CLI and API.
+15. Reprocess uses stored transcript/content + metadata first.
+16. External metadata is fetched only when required fields are missing.
+17. If an active job exists for the same resource, return existing active `job_id` only.
+18. Once job is terminal, explicit re-trigger creates a new job.
+
+### E) Job orchestration and reliability
+19. Job storage is hybrid with DB as source of truth; in-memory cache is optional and non-authoritative.
+20. Pipeline retries are manual-only (no auto retry for ingest/reprocess jobs).
+21. Global bounded concurrency is required via `UNIFIED_PIPELINE_MAX_CONCURRENCY`.
+22. Job cancellation is best-effort:
+   - `pending`: immediate cancel
+   - `processing`: cancel only between pipeline stages
+23. Cancellation terminal state is `cancelled`.
+
+### F) Idempotency and identity
+24. Idempotency is system-derived (user does not provide key).
+25. Canonical resource key format:
+   - YouTube: `yt:<video_id>`
+   - URL: `url:<hash16>` where `hash16` is 16-char base64url of SHA-256(normalized_url)
+   - fallback: `cid:<content_id>`
+26. URL normalization policy is aggressive baseline:
+   - lowercase host, strip fragment, normalize path, remove default ports
+   - remove tracking params (e.g. `utm_*`, `fbclid`, `gclid`)
+   - deterministic sort of retained params
+   - preserve identity-bearing params
+
+### G) Callbacks, observability, audit
+27. Optional callbacks are supported with HMAC-SHA256 signatures.
+28. Callback retry policy is fixed: 3 attempts with exponential backoff.
+29. Callback retries reuse stable `callback_event_id` (idempotent receiver model).
+30. Callback payload includes `schema_version`.
+31. Callback delivery state is independent from pipeline outcome.
+32. Observability baseline is required: structured logs, correlation IDs, job/stage metrics.
+33. Audit scope is balanced:
+   - full-tier access
+   - reprocess triggers
+   - cancellation request/outcome
+   - callback delivery attempts/final state
+34. Job error contract uses fixed taxonomy fields:
+   - `error_code`, `error_message`, `error_stage`
+
+### H) Data retention and access
+35. Two-tier job observability storage:
+   - compact diagnostics tier
+   - full payload/prompt tier
+36. Retention policy:
+   - compact tier: 6 months
+   - full tier: 2 months
+   - scheduled purge required and idempotent
+37. Full-tier data access is owner-only (auditable).
+38. Reprocess/cancel authorization is owner-scoped with admin override when admin role exists.
+
+### I) Versioning policy
+39. Persist `pipeline_version` on each `pipeline_job` and latest on `content`.
+40. `pipeline_version` source is app semver from `api/pyproject.toml` / release tag.
+41. `pipeline_version` stores full semver string (e.g. `2.1.0`).
+42. Semver bump policy:
+   - `major`: breaking contracts/behavior
+   - `minor`: backward-compatible features
+   - `patch`: backward-compatible fixes/refactors/docs/tests
+43. Semver bump timing: per code commit.
+44. Practical split:
+   - bump required for code/config/schema/API behavior changes
+   - bump optional for docs-only/test-only commits
+45. `.specs/` and `.claude/` changes follow docs-only semantics (optional bump unless runtime changes in same commit).
+46. Migration bump classification is impact-based:
+   - breaking/destructive: `major`
+   - additive/backward-compatible: `minor` or `patch`
+47. Runtime semver exposed in health/version endpoint as `app_version`.
+
+## Implementation Workstreams
+
+### Workstream 1: Parsing + orchestration (TDD first)
+- `Task 1` TDD: unified parser contract (`api/tests/unit/test_unified_parser.py`)
+- `Task 2` Shared LLM JSON utility (`api/menos/services/llm_json.py`)
+- `Task 3` TDD: unified orchestration (`api/tests/unit/test_unified_pipeline.py`)
+- `Task 4` Implement unified pipeline service (`api/menos/services/unified_pipeline.py`)
+
+Acceptance highlights:
+- parser rejects malformed unified payloads
+- strict all-or-nothing persistence path is covered by tests
+- no duplicate legacy parser logic remains
+
+### Workstream 2: Config + semver governance
+- `Task 5` Config + DI cutover
+  - `unified_pipeline_provider`, `unified_pipeline_model`, `UNIFIED_PIPELINE_MAX_CONCURRENCY`
+  - semver surfaced to runtime
+  - health/version includes `app_version`
+- `Task 5a` Semver governance
+  - enforce semver format and source-of-truth consistency
+  - codify bump-level policy and practical split in workflow docs/checks
+
+### Workstream 3: Schema + job model
+- `Task 6` Content status hard replacement
+  - new status fields and update semantics
+  - remove legacy status usage
+  - persist content `pipeline_version`
+- `Task 6a` Persistent job model
+  - `pipeline_job` lifecycle states: `pending`, `processing`, `completed`, `failed`, `cancelled`
+  - idempotency key storage
+  - canonical resource key generation + URL normalization
+  - compact/full data tier model
+  - timestamp contract
+  - job `pipeline_version`
+
+### Workstream 4: Router/API cutover
+- `Task 7` Hard cutover ingest routers (`youtube.py`, `content.py`)
+- `Task 8` Rewrite scripts to unified status model (`classify_content.py`, `reprocess_content.py`, `export_summaries.py`)
+- `Task 8a` Reprocess API endpoint (single-item, async, owner-scoped)
+- `Task 8c` Job status endpoint (minimal + verbose)
+- `Task 8g` Job cancellation endpoint (best-effort, stage-boundary only)
+- `Task 8d` Callback notifications (signed, retries, event id, schema version)
+
+### Workstream 5: Observability + retention + cleanup
+- `Task 8e` Observability baseline
+  - structured logs, correlation IDs, core metrics, audit events, taxonomy consistency
+- `Task 8f` Retention/purge controls
+  - 6-month compact tier, 2-month full tier, idempotent purge
+- `Task 9` Graph endpoint hard contract alignment (`/api/v1/graph`)
+- `Task 10` Remove min-length gate
+- `Task 11` Delete dead legacy code
+
+### Workstream 6: Validation + release readiness
+- `Task 12` Full verification
+  - lint/format/tests all passing
+  - real-content ingest smoke
+  - callback/job/observability validation
+  - zero warnings
+
+## Dependency Flow (Execution Order)
 ```
-Ingest Content (YouTube or Markdown)
-    │ (background task, doesn't block response)
-    ▼
-Phase 1: Deterministic Pre-enrichment
-├─ Extract Links (wiki + markdown + URLs)
-├─ URL Detection (GitHub, arXiv, DOI, PyPI, npm)
-└─ Keyword/Fuzzy Entity Match (against cached entity DB)
-    │
-    ▼
-Phase 2: Single LLM Pass
-Input:
-  • Content text (truncated to 10k chars)
-  • Pre-enrichment results (links, detected entities)
-  • Existing labels list (vocabulary consistency)
-  • Existing topics list (topic reuse)
-Output (structured JSON):
-  • tier (S/A/B/C/D)
-  • score (1-100)
-  • summary (2-3 sentences + bullets)
-  • labels (up to 10, reusing existing vocabulary)
-  • topics (hierarchical: "AI > LLMs > RAG")
-  • entity validations (confirm/reject pre-detected)
-  • additional entities (missed by deterministic steps)
-    │
-    ▼
-Phase 3: Post-processing
-├─ Deduplicate labels (Levenshtein ≤ 2)
-├─ Resolve entities (match existing / create new)
-└─ Fetch external metadata (GitHub API, arXiv API — optional)
-    │
-    ▼
-Phase 4: Persist
-├─ Update content (labels, tier, score, summary, processing_status)
-├─ Store entity edges (content_entity table)
-├─ Store links (link table)
-└─ Upload summary.md to MinIO
+Task 1 -> Task 2
+Task 1 -> Task 3 -> Task 4
+
+Task 4 -> Task 5
+Task 5 -> Task 5a
+
+Task 4 + Task 5 -> Task 6
+Task 5 -> Task 6a
+
+Task 4 + Task 6 -> Task 7
+Task 6 + Task 6a -> Task 8
+
+Task 7 -> Task 8a
+Task 6a + Task 7 + Task 8a -> Task 8c
+Task 6a + Task 7 + Task 8c -> Task 8g
+Task 6a + Task 7 + Task 8a -> Task 8d
+Task 6a + Task 7 -> Task 8e
+Task 6a -> Task 8f
+
+Task 4 + Task 7 -> Task 9
+Task 7 -> Task 10
+
+Tasks 6, 6a, 7, 8, 8a, 8c, 8d, 8e, 8f, 8g, 9, 10 -> Task 11
+Tasks 1-11 -> Task 12
 ```
 
-## Hybrid Knowledge Graph
+## Files to Create
+- `api/menos/services/unified_pipeline.py`
+- `api/menos/services/llm_json.py`
+- `api/tests/unit/test_unified_parser.py`
+- `api/tests/unit/test_unified_pipeline.py`
+- `api/tests/integration/test_unified_pipeline_wiring.py`
+- `docs/specs/unified-pipeline.md`
 
-### Two Layers, Two Purposes
+## Files to Modify
+- `api/pyproject.toml`
+- `api/menos/config.py`
+- `api/menos/services/di.py`
+- `api/menos/services/classification.py`
+- `api/menos/services/entity_extraction.py`
+- `api/menos/services/entity_resolution.py` (composition-focused changes only)
+- `api/menos/services/storage.py`
+- `api/menos/services/jobs.py` (if present)
+- `api/menos/routers/youtube.py`
+- `api/menos/routers/content.py`
+- `api/menos/routers/jobs.py` (new or existing)
+- `api/menos/routers/health.py` (or existing version endpoint router)
+- `api/menos/routers/graph.py`
+- `api/scripts/classify_content.py`
+- `api/scripts/reprocess_content.py`
+- `api/scripts/export_summaries.py`
+- `api/tests/conftest.py`
+- `docs/ingest-pipeline.md`
+- `docs/schema.md`
+- `.claude/rules/architecture.md`
+- `.claude/rules/schema.md`
 
-| Layer | Storage | Purpose | UX |
-|-------|---------|---------|-----|
-| **Labels** | Flat array on content record | Filtering, faceted search, interest profile | Sidebar tags, search filters, "More like this" |
-| **Entities** | Entity table + content_entity edges | Graph traversal, deep exploration, recommendations | Knowledge graph view, topic drill-down, connections |
+## Files to Delete (Legacy)
+- legacy dual-task status helpers and call paths
+- legacy parser compatibility aliases tied only to `labels`
 
-Labels and entities are intentionally independent. The LLM produces both in one pass:
-- Labels: flat strings, max 10, deduplicated against existing
-- Topics: hierarchical ("AI > LLMs > RAG"), stored as entity nodes
-- Other entities: Repos, Papers, Tools (detected by URL/keyword + validated by LLM)
-
-A label "RAG" and topic "AI > LLMs > RAG" may coexist — they serve different queries.
-
-### Interest Profile (Derived View)
-
-```sql
--- Top labels by frequency
-SELECT labels, count() AS cnt FROM content GROUP BY labels ORDER BY cnt DESC LIMIT 15
--- Top channels
-SELECT metadata.channel_title, count() AS cnt FROM content
-  WHERE content_type = 'youtube' GROUP BY metadata.channel_title ORDER BY cnt DESC LIMIT 10
-```
-
-### Graph Queries Enabled
-
-| Query | How |
-|-------|-----|
-| "Everything about RAG" | Label filter OR topic subtree traversal |
-| "How is Video A connected to Video B?" | Shortest path through shared labels/entities |
-| "My knowledge clusters" | Community detection on entity-content bipartite graph |
-| "What am I ignoring?" | Topics with low content count relative to subtree |
-| "Related to this video" | Shared labels (fast) + shared entities (deep) + embedding similarity |
-
-### Recommendation Engine Integration
-
-```
-recommendation_score(doc) =
-    w_embedding  * cosine(doc.embedding, query_embedding)
-  + w_labels     * jaccard(doc.labels, target.labels)
-  + w_entities   * shared_entity_count(doc, target) / max_entities
-  + w_preference * preference_similarity(doc)
-```
-
-## Changes from Phase 1 System
-
-| What | Phase 1 (current) | Phase 2 (this plan) |
-|------|-------------------|---------------------|
-| LLM calls per content | 2 (classification + entity extraction) | 1 (combined) |
-| Interest profile | Input to classification (bias) | Derived read-only view (no bias) |
-| Link extraction | Markdown uploads only | All content types, Phase 1 pre-enrichment |
-| Min content length gate | Exists for classification | Removed — always runs |
-| Status fields | Separate `classification_status` + `entity_extraction_status` | Single `processing_status` |
-| Labels | From classification only | From combined pass |
-| Topics | From entity extraction only | From combined pass |
-
-## Implementation Tasks (High-Level)
-
-### Prerequisite: Validate prompt quality
-1. Create standalone script that runs the combined prompt on 10+ real content items
-2. Compare output to existing separate classification + entity extraction results
-3. Measure: tier accuracy, label consistency, topic quality, JSON parse success rate
-4. Only proceed if quality is at parity or better
-
-### Core Implementation
-1. **Extract shared utilities** — `_extract_json_from_response()` exists in both classification.py and entity_extraction.py. Extract to shared module to avoid a third copy.
-2. **Create combined prompt template** — Merge `CLASSIFICATION_PROMPT_TEMPLATE` and entity extraction prompt. Use proper Pydantic models (reuse `ExtractedEntity`, `PreDetectedValidation` — NOT `list[dict]`).
-3. **Create `UnifiedPipelineService`** — Orchestrates 4 phases. Delegates entity resolution to existing `EntityResolutionService` (don't duplicate). Key decision: the unified service replaces `EntityResolutionService`'s LLM call with the combined prompt but reuses its resolution logic.
-4. **Schema migration** — Add `processing_status`, `processed_at`. Remove `classification_min_content_length` config.
-5. **Wire into routers** — Replace both background tasks (classification + entity extraction) with one unified pipeline call.
-6. **Update `get_interest_profile()`** — Change to label aggregation query.
-7. **Update graph endpoint** — Include entity nodes in `/api/v1/graph` response.
-
-### Testing
-- TDD: Write tests for combined prompt parser FIRST
-- TDD: Write tests for pipeline orchestration FIRST
-- Validate prompt against real content before full wiring
-- Integration tests for router-level changes
-
-### Documentation
-- Create `docs/specs/unified-pipeline.md` (design spec with mermaid diagrams)
-- Update `docs/ingest-pipeline.md` (Stage 4 → unified phases)
-- Update `docs/schema.md` (processing_status fields)
-- Update `.claude/rules/architecture.md` (reference unified pipeline)
-- Update `.claude/rules/schema.md` (note new fields)
-- Do NOT modify historic specs (entity-extraction.md, recommendation-engine.md, etc.)
-
-## Expert Review Findings (from Phase 1 review, applicable to Phase 2)
-
-Issues to address when implementing Phase 2:
-
-1. **Reuse existing Pydantic models** — `ExtractedEntity`, `PreDetectedValidation`, `ExtractionResult` already exist in models.py. Do NOT use `list[dict]`.
-2. **Extract `_extract_json_from_response()`** into shared utility before creating combined parser.
-3. **DI factory** — Add `get_unified_pipeline_service()` to di.py. Decide: use `entity_extraction_provider` settings or new `unified_pipeline_provider`.
-4. **Service composition** — `UnifiedPipelineService` should wrap `EntityResolutionService`, not duplicate it. Use its resolution methods but replace its LLM call.
-5. **Interest profile removal is a behavior change** — Removing scoring bias changes existing classification scores. Document explicitly, consider reprocessing.
-6. **Feature flag** — Add `UNIFIED_PIPELINE_ENABLED` (default false) for clean rollback. When false, Phase 1 behavior (separate tasks). When true, unified pipeline.
-7. **Combined prompt risk** — Validate against real content BEFORE investing in full wiring. Check JSON parse success rate and output quality.
-8. **`max_tokens` for combined response** — Classification uses 3000, entity extraction uses 2000. Combined may need 4000+. Verify with actual models.
-9. **Partial success handling** — If entity extraction portion of combined response fails parsing, still persist classification results. Don't lose tier/score/summary because topics were malformed.
+## Definition of Done
+- unified pipeline is the only ingest processing path
+- `processing_status` is the only active content processing model
+- `tags` naming is canonical across runtime + docs
+- old dual-task code path is removed
+- job APIs (trigger/status/cancel) work with defined contracts
+- callback + observability + retention controls are operational
+- semver policy and runtime `app_version` are in place
+- lint/format/tests pass with zero warnings
 
 ## Spec Alignment
-
-This phase supersedes/modifies aspects of these existing specs (which should NOT be edited — they're historic design documents):
-
-| Existing Spec | What Changes |
-|---|---|
-| `docs/specs/entity-extraction.md` | `should_skip_llm` removed; LLM stage merged with classification |
-| `docs/specs/recommendation-engine.md` | Interest profile rewritten as label aggregation; scoring formula adds graph signals |
-| `docs/specs/message-bus.md` | `process_content` task definition updated for unified pipeline |
-| `docs/specs/orchestrator.md` | No conflicts — operates at query time, pipeline operates at ingest time |
-| `docs/specs/ui-roadmap.md` | No conflicts — gains capabilities from richer graph |
+- Add: `docs/specs/unified-pipeline.md`
+- Update: `docs/ingest-pipeline.md`, `docs/schema.md`, `.claude/rules/architecture.md`, `.claude/rules/schema.md`
+- Keep historical specs unchanged (reference only)
