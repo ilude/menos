@@ -18,5 +18,8 @@ A while loop calling a paginated method needs N+1 mock `side_effect` entries —
 ## SurrealDB Vector Search Requires NONE Guard
 `vector::similarity::cosine(embedding, $embedding)` errors if `embedding` is `NONE` on any row. The error returns as a string (not a list), silently breaking result parsing. Always add `WHERE embedding != NONE AND ...` before cosine similarity filters.
 
-## SurrealDB RecordID Objects
+## SurrealDB RecordID Objects (Read Side)
 The surrealdb Python client returns `RecordID` objects (not strings) for `id`, `source`, `target`, and other reference fields. Always convert before passing to Pydantic models. Use the `_stringify_record_id()`, `_parse_content()`, `_parse_chunk()`, `_parse_link()`, or `_parse_entity()` helpers in `storage.py`. Unit tests with mocked DB won't catch this — smoke tests against the live API are the safety net.
+
+## SurrealDB RecordID Objects (Write Side)
+Parameterized `WHERE id = $param` and `WHERE ref_field = $param` clauses require `RecordID` objects, not strings. `f"content:{id}"` silently matches nothing — the UPDATE/SELECT/DELETE succeeds but affects zero rows. Use `RecordID("content", id)` for all query params that compare against `id` or `record<T>` fields. Direct `db.select/update/delete("content:{id}")` calls accept string format.
