@@ -4,6 +4,7 @@ import io
 from unittest.mock import MagicMock
 
 import pytest
+from surrealdb import RecordID
 
 from menos.models import (
     ChunkModel,
@@ -298,8 +299,8 @@ class TestSurrealDBRepository:
         mock_db.create.assert_called_once()
         # Verify record references are created
         call_args = mock_db.create.call_args[0]
-        assert call_args[1]["source"] == "content:source123"
-        assert call_args[1]["target"] == "content:target456"
+        assert call_args[1]["source"] == RecordID("content", "source123")
+        assert call_args[1]["target"] == RecordID("content", "target456")
 
     @pytest.mark.asyncio
     async def test_create_link_without_target(self):
@@ -331,7 +332,7 @@ class TestSurrealDBRepository:
         mock_db.query.assert_called_once()
         call_args = mock_db.query.call_args[0]
         assert "DELETE (SELECT id FROM link WHERE source = $source)" in call_args[0]
-        assert call_args[1] == {"source": "content:test123"}
+        assert call_args[1] == {"source": RecordID("content", "test123")}
 
     @pytest.mark.asyncio
     async def test_get_links_by_source(self):
@@ -414,7 +415,7 @@ class TestSurrealDBRepository:
         mock_db.query.assert_called_once()
         call_args = mock_db.query.call_args[0]
         assert "SELECT * FROM link WHERE target = $target" in call_args[0]
-        assert call_args[1] == {"target": "content:target456"}
+        assert call_args[1] == {"target": RecordID("content", "target456")}
 
     @pytest.mark.asyncio
     async def test_get_links_by_target_empty(self):
@@ -1252,8 +1253,8 @@ class TestContentEntityEdgeCRUD:
         assert result.id == "edge1"
         assert result.created_at is not None
         call_data = mock_db.create.call_args[0][1]
-        assert call_data["content_id"] == "content:c1"
-        assert call_data["entity_id"] == "entity:e1"
+        assert call_data["content_id"] == RecordID("content", "c1")
+        assert call_data["entity_id"] == RecordID("entity", "e1")
 
     @pytest.mark.asyncio
     async def test_delete_content_entity_edges(self):
@@ -1266,7 +1267,7 @@ class TestContentEntityEdgeCRUD:
         call_args = mock_db.query.call_args[0]
         assert "DELETE" in call_args[0]
         assert "content_entity" in call_args[0]
-        assert call_args[1] == {"content_id": "content:c1"}
+        assert call_args[1] == {"content_id": RecordID("content", "c1")}
 
 
 class TestGetEntitiesForContent:
@@ -1535,7 +1536,7 @@ class TestUpdateContentExtractionStatus:
         mock_db.query.assert_called_once()
         call_args = mock_db.query.call_args[0]
         assert "entity_extraction_status" in call_args[0]
-        assert call_args[1]["content_id"] == "content:c1"
+        assert call_args[1]["content_id"] == RecordID("content", "c1")
         assert call_args[1]["status"] == "completed"
 
 
@@ -1598,7 +1599,7 @@ class TestClassificationMethods:
         mock_db.query.assert_called_once()
         call_args = mock_db.query.call_args[0]
         assert "classification_status" in call_args[0]
-        assert call_args[1]["content_id"] == "content:c1"
+        assert call_args[1]["content_id"] == RecordID("content", "c1")
         assert call_args[1]["status"] == "processing"
 
     @pytest.mark.asyncio

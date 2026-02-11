@@ -5,7 +5,7 @@ from typing import BinaryIO
 
 from minio import Minio
 from minio.error import S3Error
-from surrealdb import Surreal
+from surrealdb import RecordID, Surreal
 
 from menos.models import (
     ChunkModel,
@@ -352,9 +352,9 @@ class SurrealDBRepository:
         link_data = link.model_dump(exclude_none=True)
 
         # Convert IDs to record references
-        link_data["source"] = f"content:{link_data['source']}"
+        link_data["source"] = RecordID("content", link_data["source"])
         if link_data.get("target"):
-            link_data["target"] = f"content:{link_data['target']}"
+            link_data["target"] = RecordID("content", link_data["target"])
 
         result = self.db.create("link", link_data)
         if result:
@@ -370,7 +370,7 @@ class SurrealDBRepository:
         """
         self.db.query(
             "DELETE (SELECT id FROM link WHERE source = $source)",
-            {"source": f"content:{content_id}"},
+            {"source": RecordID("content", content_id)},
         )
 
     async def get_links_by_source(self, content_id: str) -> list[LinkModel]:
@@ -384,7 +384,7 @@ class SurrealDBRepository:
         """
         result = self.db.query(
             "SELECT * FROM link WHERE source = $source",
-            {"source": f"content:{content_id}"},
+            {"source": RecordID("content", content_id)},
         )
         raw_items = self._parse_query_result(result)
 
@@ -401,7 +401,7 @@ class SurrealDBRepository:
         """
         result = self.db.query(
             "SELECT * FROM link WHERE target = $target",
-            {"target": f"content:{content_id}"},
+            {"target": RecordID("content", content_id)},
         )
         raw_items = self._parse_query_result(result)
         return [self._parse_link(item) for item in raw_items]
@@ -456,7 +456,7 @@ class SurrealDBRepository:
         edges = []
         if node_ids:
             # Build query for links between nodes
-            node_refs = [f"content:{nid}" for nid in node_ids]
+            node_refs = [RecordID("content", nid) for nid in node_ids]
             link_result = self.db.query(
                 "SELECT * FROM link WHERE source IN $ids OR target IN $ids",
                 {"ids": node_refs},
@@ -705,7 +705,7 @@ class SurrealDBRepository:
         # Delete all edges to this entity
         self.db.query(
             "DELETE (SELECT id FROM content_entity WHERE entity_id = $entity_id)",
-            {"entity_id": f"entity:{entity_id}"},
+            {"entity_id": RecordID("entity", entity_id)},
         )
         # Delete the entity
         self.db.delete(f"entity:{entity_id}")
@@ -764,8 +764,8 @@ class SurrealDBRepository:
         edge_data = edge.model_dump(exclude_none=True, mode="json")
 
         # Convert IDs to record references
-        edge_data["content_id"] = f"content:{edge_data['content_id']}"
-        edge_data["entity_id"] = f"entity:{edge_data['entity_id']}"
+        edge_data["content_id"] = RecordID("content", edge_data["content_id"])
+        edge_data["entity_id"] = RecordID("entity", edge_data["entity_id"])
 
         result = self.db.create("content_entity", edge_data)
         if result:
@@ -789,7 +789,7 @@ class SurrealDBRepository:
             SELECT *, entity_id.* AS entity FROM content_entity
             WHERE content_id = $content_id
             """,
-            {"content_id": f"content:{content_id}"},
+            {"content_id": RecordID("content", content_id)},
         )
         raw_items = self._parse_query_result(result)
 
@@ -825,7 +825,7 @@ class SurrealDBRepository:
             WHERE entity_id = $entity_id
             LIMIT $limit START $offset
             """,
-            {"entity_id": f"entity:{entity_id}", "limit": limit, "offset": offset},
+            {"entity_id": RecordID("entity", entity_id), "limit": limit, "offset": offset},
         )
         raw_items = self._parse_query_result(result)
 
@@ -846,7 +846,7 @@ class SurrealDBRepository:
         """
         self.db.query(
             "DELETE (SELECT id FROM content_entity WHERE content_id = $content_id)",
-            {"content_id": f"content:{content_id}"},
+            {"content_id": RecordID("content", content_id)},
         )
 
     async def find_or_create_entity(
@@ -906,7 +906,7 @@ class SurrealDBRepository:
                 updated_at = time::now()
             WHERE id = $content_id
             """,
-            {"content_id": f"content:{content_id}", "status": status},
+            {"content_id": RecordID("content", content_id), "status": status},
         )
 
     async def get_topic_hierarchy(self) -> list[EntityModel]:
@@ -941,7 +941,7 @@ class SurrealDBRepository:
                 updated_at = time::now()
             WHERE id = $content_id
             """,
-            {"content_id": f"content:{content_id}", "status": status},
+            {"content_id": RecordID("content", content_id), "status": status},
         )
 
     async def update_content_classification(
@@ -970,7 +970,7 @@ class SurrealDBRepository:
             WHERE id = $content_id
             """,
             {
-                "content_id": f"content:{content_id}",
+                "content_id": RecordID("content", content_id),
                 "data": classification_dict,
                 "tier": classification_dict.get("tier", ""),
                 "score": classification_dict.get("quality_score", 0),
