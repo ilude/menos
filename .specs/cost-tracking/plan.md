@@ -35,6 +35,7 @@ Target state:
 - `GET /api/v1/usage` endpoint with date range and provider filters
 - Cost estimates use a hybrid pricing snapshot model (daily refresh + persisted snapshot)
 - Context strings identify call source: `pipeline:{job_id}`, `search:expansion`, `search:synthesis`
+- All application LLM calls cross a single architecture boundary: DI-provided metered wrappers (no direct raw provider calls in feature code)
 
 ## Complexity Analysis
 
@@ -137,6 +138,7 @@ Target state:
 - **T4: Wire metering + scheduler into app lifecycle** [Sonnet] — DI Builder
   - Modify `api/menos/services/di.py`
   - Modify `api/menos/main.py` lifespan startup/shutdown hooks
+  - Update `.claude/CLAUDE.md` with an explicit rule: all feature LLM `generate()` calls must go through DI-provided metered wrappers (no direct raw provider usage)
   - Wrap providers in `get_expansion_provider()`, `get_synthesis_provider()`, `get_unified_pipeline_provider()` with `MeteringLLMProvider`
   - Pass appropriate context prefixes: `"search:expansion"`, `"search:synthesis"`, `"pipeline"`
   - For unified pipeline, update `UnifiedPipelineService` to pass job_id to metering context: `"pipeline:{job_id}"`
@@ -145,9 +147,12 @@ Target state:
   - Start in-process daily pricing refresh scheduler during API lifespan startup
   - Stop scheduler cleanly during API lifespan shutdown
   - Assume a single API instance (no distributed lock or leader election in this phase)
+  - Enforce architecture boundary: application feature code obtains LLM access via DI-provided metered wrappers only (no direct raw provider usage)
 
   **Acceptance Criteria**:
   - All LLM providers (except NoOp) wrapped with metering
+  - Application LLM entrypoints use DI-provided metered wrappers as the only call path
+  - `.claude/CLAUDE.md` includes the architecture-boundary rule for future feature work
   - Context strings correctly identify call source
   - Pipeline context includes job_id for granular tracking
   - Exactly one in-process scheduler runs per API process lifespan
@@ -214,6 +219,9 @@ Target state:
     - Test aggregation logic
     - Test empty results case
     - Test staleness metadata in response (fresh and stale cases)
+  - Add DI architecture-boundary tests:
+    - Verify DI provider factories return metered wrappers for all active LLM entrypoints
+    - Verify feature services (`UnifiedPipelineService`, `AgentService`) receive wrapped providers, not raw provider instances
   - All tests must pass with zero warnings
 
   **Acceptance Criteria**:
@@ -257,6 +265,9 @@ Pricing refresh scheduler is owned by API process lifespan (startup/shutdown). C
 ### FallbackProvider Metering
 `FallbackProvider` tries multiple providers in sequence. Each sub-provider should be individually metered. Wrap each provider in the fallback chain, not the `FallbackProvider` itself.
 
+### LLM Architecture Boundary
+Treat DI-provided metered wrappers as the only sanctioned application boundary for `generate()` calls. New features must integrate through DI wrappers instead of invoking raw provider implementations directly.
+
 ### Cost Calculation
 ```python
 cost = (input_tokens / 1_000_000) * input_price + (output_tokens / 1_000_000) * output_price
@@ -290,6 +301,7 @@ WHERE created_at >= $start AND created_at <= $end
 7. No performance degradation in LLM calls (metering is async)
 8. All unit tests pass with >80% coverage
 9. Linter passes with no warnings
+10. DI architecture-boundary tests ensure no feature path bypasses metering
 
 ## Future Extensions
 
