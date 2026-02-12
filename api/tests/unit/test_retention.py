@@ -32,9 +32,9 @@ class TestPurgeExpiredJobs:
         calls = db.query.call_args_list
         assert len(calls) == 2
         assert "data_tier = 'compact'" in calls[0][0][0]
-        assert "6mo" in calls[0][0][0]
+        assert "180d" in calls[0][0][0]
         assert "data_tier = 'full'" in calls[1][0][0]
-        assert "2mo" in calls[1][0][0]
+        assert "60d" in calls[1][0][0]
 
     @pytest.mark.asyncio
     async def test_purge_empty_table(self, job_repo):

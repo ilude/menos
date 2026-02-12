@@ -210,12 +210,12 @@ class JobRepository:
         """
         compact_result = self.db.query(
             "DELETE FROM pipeline_job WHERE data_tier = 'compact' "
-            "AND finished_at != NONE AND finished_at < time::now() - 6mo "
+            "AND finished_at != NONE AND finished_at < time::now() - 180d "
             "RETURN BEFORE"
         )
         full_result = self.db.query(
             "DELETE FROM pipeline_job WHERE data_tier = 'full' "
-            "AND finished_at != NONE AND finished_at < time::now() - 2mo "
+            "AND finished_at != NONE AND finished_at < time::now() - 60d "
             "RETURN BEFORE"
         )
         compact_count = len(self._parse_query_result(compact_result))

@@ -370,7 +370,7 @@ Pipeline jobs use tiered retention based on `data_tier` field.
 DELETE FROM pipeline_job
 WHERE data_tier = 'compact'
   AND finished_at != NONE
-  AND finished_at < time::now() - 6mo
+  AND finished_at < time::now() - 180d
 RETURN BEFORE
 ```
 
@@ -379,7 +379,7 @@ RETURN BEFORE
 DELETE FROM pipeline_job
 WHERE data_tier = 'full'
   AND finished_at != NONE
-  AND finished_at < time::now() - 2mo
+  AND finished_at < time::now() - 60d
 RETURN BEFORE
 ```
 
