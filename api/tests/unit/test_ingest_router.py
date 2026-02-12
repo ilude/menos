@@ -177,3 +177,11 @@ def test_canonicalization_is_deterministic_and_strips_tracking():
     assert "utm_source" not in canonical_a
     assert "fbclid" not in canonical_a
     assert "gBraId" not in canonical_a
+
+
+def test_legacy_youtube_ingest_endpoint_is_removed(authed_client):
+    response = authed_client.post(
+        "/api/v1/youtube/ingest",
+        json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+    )
+    assert response.status_code == 405

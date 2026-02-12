@@ -62,7 +62,6 @@ class PipelineJob(BaseModel):
     status: JobStatus = JobStatus.PENDING
     pipeline_version: str = ""
     data_tier: DataTier = DataTier.COMPACT
-    idempotency_key: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     error_stage: str | None = None

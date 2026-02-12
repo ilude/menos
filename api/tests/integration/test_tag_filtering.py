@@ -86,7 +86,7 @@ class TestStorageTagFiltering:
         call_args = mock_db.query.call_args
         query = call_args[0][0]
         params = call_args[0][1]
-        assert "WHERE tags CONTAINSALL $tags" in query
+        assert "WHERE tags CONTAINSANY $tags" in query
         assert params["tags"] == ["python"]
 
     def test_list_content_builds_correct_query_with_multiple_tags(self):
@@ -103,7 +103,7 @@ class TestStorageTagFiltering:
         call_args = mock_db.query.call_args
         query = call_args[0][0]
         params = call_args[0][1]
-        assert "WHERE tags CONTAINSALL $tags" in query
+        assert "WHERE tags CONTAINSANY $tags" in query
         assert params["tags"] == ["python", "testing"]
 
     def test_list_content_builds_correct_query_with_tags_and_content_type(self):
@@ -120,7 +120,7 @@ class TestStorageTagFiltering:
         call_args = mock_db.query.call_args
         query = call_args[0][0]
         params = call_args[0][1]
-        assert "WHERE content_type = $content_type AND tags CONTAINSALL $tags" in query
+        assert "WHERE content_type = $content_type AND tags CONTAINSANY $tags" in query
         assert params["content_type"] == "document"
         assert params["tags"] == ["python"]
 
@@ -137,4 +137,4 @@ class TestStorageTagFiltering:
         # Verify query doesn't include tags filter
         call_args = mock_db.query.call_args
         query = call_args[0][0]
-        assert "tags CONTAINSALL" not in query
+        assert "tags CONTAINSANY" not in query

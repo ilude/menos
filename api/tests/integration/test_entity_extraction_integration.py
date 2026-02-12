@@ -1,9 +1,10 @@
 """Integration tests for pipeline orchestrator wiring into ingest routes."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from menos.models import ContentMetadata, PipelineJob
+from menos.services.url_detector import DetectedURL
 
 
 class TestYouTubeIngestPipelineIntegration:
@@ -14,14 +15,10 @@ class TestYouTubeIngestPipelineIntegration:
         authed_client,
         mock_surreal_repo,
         mock_youtube_service,
-        mock_metadata_service,
         mock_minio_storage,
-        mock_embedding_service,
         mock_pipeline_orchestrator,
     ):
         """Full chain: ingest -> orchestrator.submit called with correct args."""
-        from menos.services.youtube_metadata import YouTubeMetadata
-
         mock_transcript = MagicMock()
         mock_transcript.video_id = "integration_vid"
         mock_transcript.language = "en"
@@ -33,31 +30,10 @@ class TestYouTubeIngestPipelineIntegration:
         mock_youtube_service.extract_video_id.return_value = "integration_vid"
         mock_youtube_service.fetch_transcript.return_value = mock_transcript
 
-        mock_metadata = YouTubeMetadata(
-            video_id="integration_vid",
-            title="RAG Tutorial",
-            description="Learn about RAG",
-            description_urls=["https://github.com/langchain-ai/langchain"],
-            channel_id="tech_ch",
-            channel_title="Tech Channel",
-            published_at="2024-06-01T00:00:00Z",
-            duration="PT15M",
-            duration_seconds=900,
-            duration_formatted="15:00",
-            view_count=5000,
-            like_count=500,
-            comment_count=50,
-            tags=["rag", "ai"],
-            category_id="28",
-            thumbnails={},
-            fetched_at="2024-06-01T12:00:00Z",
-        )
-        mock_metadata_service.fetch_metadata.return_value = mock_metadata
-
         created_content = ContentMetadata(
             id="int_content1",
             content_type="youtube",
-            title="RAG Tutorial",
+            title="YouTube: integration_vid",
             mime_type="text/plain",
             file_size=2000,
             file_path="youtube/integration_vid/transcript.txt",
@@ -73,14 +49,24 @@ class TestYouTubeIngestPipelineIntegration:
         )
         mock_pipeline_orchestrator.submit = AsyncMock(return_value=submitted_job)
 
-        response = authed_client.post(
-            "/api/v1/youtube/ingest",
-            json={"url": "https://www.youtube.com/watch?v=integration_vid"},
-        )
+        with patch(
+            "menos.routers.ingest.URLDetector.classify_url",
+            return_value=DetectedURL(
+                url="https://www.youtube.com/watch?v=integration_vid",
+                url_type="youtube",
+                extracted_id="integration_vid",
+            ),
+        ):
+            response = authed_client.post(
+                "/api/v1/ingest",
+                json={"url": "https://www.youtube.com/watch?v=integration_vid"},
+            )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["video_id"] == "integration_vid"
+        assert data["content_id"] == "int_content1"
+        assert data["content_type"] == "youtube"
+        assert data["title"] == "YouTube: integration_vid"
         assert data["job_id"] == "pipeline-job-1"
 
         # Verify orchestrator was called with correct args
@@ -88,6 +74,6 @@ class TestYouTubeIngestPipelineIntegration:
             "int_content1",
             mock_transcript.full_text,
             "youtube",
-            "RAG Tutorial",
+            "YouTube: integration_vid",
             "yt:integration_vid",
         )

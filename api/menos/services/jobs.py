@@ -197,27 +197,3 @@ class JobRepository:
         raw_items = self._parse_query_result(result)
         jobs = [self._parse_job(item) for item in raw_items]
         return jobs, len(jobs)
-
-    async def purge_expired_jobs(self) -> dict[str, int]:
-        """Purge expired pipeline job records.
-
-        Retention policy:
-        - compact tier: 6 months after finished_at
-        - full tier: 2 months after finished_at
-
-        Returns:
-            Dict with counts of purged jobs per tier
-        """
-        compact_result = self.db.query(
-            "DELETE FROM pipeline_job WHERE data_tier = 'compact' "
-            "AND finished_at != NONE AND finished_at < time::now() - 180d "
-            "RETURN BEFORE"
-        )
-        full_result = self.db.query(
-            "DELETE FROM pipeline_job WHERE data_tier = 'full' "
-            "AND finished_at != NONE AND finished_at < time::now() - 60d "
-            "RETURN BEFORE"
-        )
-        compact_count = len(self._parse_query_result(compact_result))
-        full_count = len(self._parse_query_result(full_result))
-        return {"compact": compact_count, "full": full_count}

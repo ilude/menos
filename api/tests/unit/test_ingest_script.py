@@ -21,10 +21,7 @@ class TestExtractUrl:
     def test_extracts_url_with_surrounding_text(self):
         """Test extracting URL from text with surrounding content."""
         line = "Check out https://www.youtube.com/watch?v=abc text"
-        assert (
-            extract_url(line)
-            == "https://www.youtube.com/watch?v=abc"
-        )
+        assert extract_url(line) == "https://www.youtube.com/watch?v=abc"
 
     def test_returns_none_for_no_url(self):
         """Test that a line with no URL returns None."""
@@ -60,16 +57,18 @@ class TestMain:
         mock_videos_file.read_text.return_value = video_url
         # Path(__file__).parent.parent.parent / "data" / "youtube-videos.txt"
         mock_path_instance = MagicMock()
-        mock_path_instance.parent.parent.parent.__truediv__.return_value = (
-            MagicMock(__truediv__=MagicMock(return_value=mock_videos_file))
+        mock_path_instance.parent.parent.parent.__truediv__.return_value = MagicMock(
+            __truediv__=MagicMock(return_value=mock_videos_file)
         )
         mock_path_cls.return_value = mock_path_instance
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "video_id": "vid123",
-            "chunks_created": 5,
+            "content_id": "content-vid123",
+            "content_type": "youtube",
+            "title": "YouTube: vid123",
+            "job_id": "job-123",
         }
         mock_client = MagicMock()
         mock_client.__enter__ = MagicMock(return_value=mock_client)
@@ -78,16 +77,18 @@ class TestMain:
         mock_httpx_client_cls.return_value = mock_client
 
         from scripts.ingest_videos import main
+
         main()
 
         mock_client.post.assert_called_once()
         post_call = mock_client.post.call_args
-        assert post_call[0][0] == "/api/v1/youtube/ingest"
+        assert post_call[0][0] == "/api/v1/ingest"
         # Verify the body contains the URL, not a transcript
         import json
+
         body = json.loads(post_call.kwargs["content"])
         assert body["url"] == video_url
-        assert body["generate_embeddings"] is True
+        assert body == {"url": video_url}
 
     @patch("scripts.ingest_videos.httpx.Client")
     @patch("scripts.ingest_videos.Path")
@@ -111,8 +112,8 @@ class TestMain:
         mock_videos_file = MagicMock()
         mock_videos_file.read_text.return_value = video_url
         mock_path_instance = MagicMock()
-        mock_path_instance.parent.parent.parent.__truediv__.return_value = (
-            MagicMock(__truediv__=MagicMock(return_value=mock_videos_file))
+        mock_path_instance.parent.parent.parent.__truediv__.return_value = MagicMock(
+            __truediv__=MagicMock(return_value=mock_videos_file)
         )
         mock_path_cls.return_value = mock_path_instance
 
@@ -126,6 +127,7 @@ class TestMain:
         mock_httpx_client_cls.return_value = mock_client
 
         from scripts.ingest_videos import main
+
         main()
 
         captured = capsys.readouterr()
@@ -150,8 +152,8 @@ class TestMain:
         mock_videos_file = MagicMock()
         mock_videos_file.read_text.return_value = video_url
         mock_path_instance = MagicMock()
-        mock_path_instance.parent.parent.parent.__truediv__.return_value = (
-            MagicMock(__truediv__=MagicMock(return_value=mock_videos_file))
+        mock_path_instance.parent.parent.parent.__truediv__.return_value = MagicMock(
+            __truediv__=MagicMock(return_value=mock_videos_file)
         )
         mock_path_cls.return_value = mock_path_instance
 
@@ -161,6 +163,7 @@ class TestMain:
         mock_httpx_client_cls.return_value = mock_client
 
         from scripts.ingest_videos import main
+
         main()
 
         captured = capsys.readouterr()

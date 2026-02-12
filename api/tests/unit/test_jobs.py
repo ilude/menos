@@ -46,7 +46,6 @@ class TestJobModels:
             status=JobStatus.PROCESSING,
             pipeline_version="1.0.0",
             data_tier=DataTier.FULL,
-            idempotency_key="idem-123",
             error_code="E001",
             error_message="Something failed",
             error_stage="classification",
@@ -55,7 +54,6 @@ class TestJobModels:
         assert job.id == "job1"
         assert job.status == JobStatus.PROCESSING
         assert job.data_tier == DataTier.FULL
-        assert job.idempotency_key == "idem-123"
 
 
 class TestJobRepositoryCreateJob:

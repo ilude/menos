@@ -1,9 +1,5 @@
 #!/usr/bin/env python
-"""Script to ingest YouTube videos from a list file.
-
-Posts each URL to the /api/v1/youtube/ingest endpoint, which handles
-transcript fetching (via Webshare proxy) server-side.
-"""
+"""Script to ingest YouTube videos from a list file."""
 
 import json
 import os
@@ -54,29 +50,26 @@ def main():
             try:
                 body = {
                     "url": url,
-                    "generate_embeddings": True,
                 }
                 body_bytes = json.dumps(body).encode()
 
                 headers = signer.sign_request(
                     "POST",
-                    "/api/v1/youtube/ingest",
+                    "/api/v1/ingest",
                     body=body_bytes,
                     host=urlparse(settings.api_base_url).netloc,
                 )
                 headers["content-type"] = "application/json"
 
                 response = client.post(
-                    "/api/v1/youtube/ingest",
+                    "/api/v1/ingest",
                     content=body_bytes,
                     headers=headers,
                 )
 
                 if response.status_code == 200:
                     data = response.json()
-                    print(
-                        f"    OK: {data.get('video_id')} - {data.get('chunks_created')} chunks"
-                    )
+                    print(f"    OK: {data.get('content_id')} - {data.get('content_type')}")
                 else:
                     print(f"    ERROR {response.status_code}: {response.text}")
             except Exception as e:
