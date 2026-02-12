@@ -61,6 +61,26 @@ async def test_extract_markdown_falls_back_to_markdown_heading_for_title():
 
 
 @pytest.mark.asyncio
+async def test_extract_markdown_supports_docling_md_content_shape():
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "document": {"md_content": "# Example Domain\n\nBody text"},
+        "status": "success",
+    }
+
+    with patch(
+        "menos.services.docling.httpx.AsyncClient",
+        return_value=_mock_async_client(AsyncMock(return_value=response)),
+    ):
+        client = DoclingClient("http://docling-serve:5001")
+        result = await client.extract_markdown("https://example.com/article")
+
+    assert result.markdown.startswith("# Example Domain")
+    assert result.title == "Example Domain"
+
+
+@pytest.mark.asyncio
 async def test_extract_markdown_raises_503_on_docling_unavailable():
     request = httpx.Request("POST", "http://docling-serve:5001/v1/convert/source")
     mock_post = AsyncMock(side_effect=httpx.ConnectError("failed", request=request))

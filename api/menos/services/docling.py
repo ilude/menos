@@ -60,7 +60,7 @@ def _extract_markdown(data: object) -> str | None:
     if not isinstance(data, dict):
         return None
 
-    markdown = data.get("markdown") or data.get("md")
+    markdown = data.get("markdown") or data.get("md") or data.get("md_content")
     if isinstance(markdown, str) and markdown.strip():
         return markdown
 
