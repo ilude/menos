@@ -407,6 +407,132 @@ class SurrealDBRepository:
 
         return [{"name": name, "count": count} for name, count in sorted_tags]
 
+    async def get_tag_cooccurrence(
+        self,
+        min_count: int = 3,
+        limit: int = 20,
+    ) -> dict[str, list[str]]:
+        """Get frequently co-occurring tags from completed content."""
+        result = self.db.query(
+            "SELECT tags FROM content "
+            "WHERE processing_status = 'completed' AND tags != NONE AND array::len(tags) > 1"
+        )
+        raw_items = self._parse_query_result(result)
+        if not raw_items:
+            return {}
+
+        pair_counts: dict[tuple[str, str], int] = {}
+        for item in raw_items:
+            tags = item.get("tags", [])
+            if not isinstance(tags, list):
+                continue
+            unique_tags = sorted({tag for tag in tags if isinstance(tag, str) and tag})
+            for i, left in enumerate(unique_tags):
+                for right in unique_tags[i + 1 :]:
+                    pair_counts[(left, right)] = pair_counts.get((left, right), 0) + 1
+
+        if not pair_counts:
+            return {}
+
+        by_tag: dict[str, list[tuple[str, int]]] = {}
+        for (left, right), count in pair_counts.items():
+            if count < min_count:
+                continue
+            by_tag.setdefault(left, []).append((right, count))
+            by_tag.setdefault(right, []).append((left, count))
+
+        if not by_tag:
+            return {}
+
+        output: dict[str, list[str]] = {}
+        for tag in sorted(by_tag):
+            related = sorted(by_tag[tag], key=lambda item: (-item[1], item[0]))
+            related_tags = [related_tag for related_tag, _ in related[:limit]]
+            if related_tags:
+                output[tag] = related_tags
+        return output
+
+    async def get_tier_distribution(self) -> dict[str, int]:
+        """Get tier distribution for completed content."""
+        result = self.db.query(
+            "SELECT tier, count() AS count FROM content "
+            "WHERE processing_status = 'completed' AND tier != NONE GROUP BY tier"
+        )
+        rows = self._parse_query_result(result)
+        if not rows:
+            return {}
+
+        distribution: dict[str, int] = {}
+        for row in rows:
+            tier = row.get("tier")
+            if not isinstance(tier, str) or not tier:
+                continue
+            try:
+                distribution[tier.upper()] = int(row.get("count", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+        return distribution
+
+    async def get_tag_aliases(self, limit: int = 50) -> dict[str, str]:
+        """Get most common variant->canonical tag mappings."""
+        result = self.db.query(
+            "SELECT variant, canonical FROM tag_alias "
+            "ORDER BY count DESC, updated_at DESC LIMIT $limit",
+            {"limit": limit},
+        )
+        rows = self._parse_query_result(result)
+        if not rows:
+            return {}
+
+        aliases: dict[str, str] = {}
+        for row in rows:
+            variant = row.get("variant")
+            canonical = row.get("canonical")
+            if isinstance(variant, str) and isinstance(canonical, str) and variant and canonical:
+                aliases[variant] = canonical
+        return aliases
+
+    async def record_tag_alias(self, variant: str, canonical: str) -> None:
+        """Upsert alias mapping and increment usage count."""
+        if not variant or not canonical:
+            return
+
+        result = self.db.query(
+            "SELECT id, count FROM tag_alias WHERE variant = $variant "
+            "AND canonical = $canonical LIMIT 1",
+            {"variant": variant, "canonical": canonical},
+        )
+        rows = self._parse_query_result(result)
+
+        if rows:
+            alias_id = rows[0].get("id")
+            if alias_id is None:
+                return
+            try:
+                existing_count = int(rows[0].get("count", 0) or 0)
+            except (TypeError, ValueError):
+                existing_count = 0
+            self.db.update(
+                alias_id,
+                {
+                    "variant": variant,
+                    "canonical": canonical,
+                    "count": existing_count + 1,
+                    "updated_at": datetime.now(UTC),
+                },
+            )
+            return
+
+        self.db.create(
+            "tag_alias",
+            {
+                "variant": variant,
+                "canonical": canonical,
+                "count": 1,
+                "updated_at": datetime.now(UTC),
+            },
+        )
+
     async def find_content_by_title(self, title: str) -> ContentMetadata | None:
         """Find content by exact title match.
 

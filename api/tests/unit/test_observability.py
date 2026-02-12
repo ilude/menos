@@ -38,6 +38,11 @@ class TestJobIdCorrelation:
         llm.model = "test-model"
         repo = MagicMock()
         repo.list_tags_with_counts = AsyncMock(return_value=[{"name": "existing"}])
+        repo.get_topic_hierarchy = AsyncMock(return_value=[])
+        repo.get_tag_cooccurrence = AsyncMock(return_value={})
+        repo.get_tier_distribution = AsyncMock(return_value={})
+        repo.get_tag_aliases = AsyncMock(return_value={})
+        repo.record_tag_alias = AsyncMock()
         return UnifiedPipelineService(
             llm_provider=llm,
             repo=repo,

@@ -2205,3 +2205,92 @@ class TestGetRelatedContent:
 
         with pytest.raises(ValueError, match="window must"):
             await repo.get_related_content("source-id", window="12x")
+
+
+class TestPipelineFeedbackStorage:
+    """Tests for pipeline feedback storage methods."""
+
+    @pytest.mark.asyncio
+    async def test_get_tag_cooccurrence(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {"tags": ["python", "api", "fastapi"]},
+                    {"tags": ["python", "api"]},
+                    {"tags": ["python", "docker"]},
+                    {"tags": ["api", "python"]},
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        result = await repo.get_tag_cooccurrence(min_count=2, limit=10)
+
+        assert result["python"][0] == "api"
+        assert result["api"][0] == "python"
+        assert "docker" not in result.get("python", [])
+
+    @pytest.mark.asyncio
+    async def test_get_tier_distribution_empty(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [{"result": []}]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        result = await repo.get_tier_distribution()
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_get_tag_aliases(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {"variant": "k8s", "canonical": "kubernetes"},
+                    {"variant": "open-ai", "canonical": "openai"},
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        result = await repo.get_tag_aliases(limit=2)
+
+        assert result == {"k8s": "kubernetes", "open-ai": "openai"}
+        call_args = mock_db.query.call_args[0]
+        assert "FROM tag_alias" in call_args[0]
+        assert call_args[1]["limit"] == 2
+
+    @pytest.mark.asyncio
+    async def test_record_tag_alias_create(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [{"result": []}]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        await repo.record_tag_alias("langchain", "LangChain")
+
+        mock_db.create.assert_called_once()
+        create_args = mock_db.create.call_args[0]
+        assert create_args[0] == "tag_alias"
+        assert create_args[1]["variant"] == "langchain"
+        assert create_args[1]["canonical"] == "LangChain"
+        assert create_args[1]["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_record_tag_alias_update(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {"id": "tag_alias:abc", "count": 4},
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        await repo.record_tag_alias("langchain", "LangChain")
+
+        mock_db.update.assert_called_once()
+        update_args = mock_db.update.call_args[0]
+        assert update_args[0] == "tag_alias:abc"
+        assert update_args[1]["count"] == 5

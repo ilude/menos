@@ -70,6 +70,11 @@ def mock_repo():
             {"name": "devops", "count": 3},
         ]
     )
+    repo.get_topic_hierarchy = AsyncMock(return_value=[])
+    repo.get_tag_cooccurrence = AsyncMock(return_value={})
+    repo.get_tier_distribution = AsyncMock(return_value={})
+    repo.get_tag_aliases = AsyncMock(return_value={})
+    repo.record_tag_alias = AsyncMock()
     return repo
 
 
@@ -400,6 +405,11 @@ class TestShortContentProcessing:
 
         repo = MagicMock()
         repo.list_tags_with_counts = AsyncMock(return_value=[])
+        repo.get_topic_hierarchy = AsyncMock(return_value=[])
+        repo.get_tag_cooccurrence = AsyncMock(return_value={})
+        repo.get_tier_distribution = AsyncMock(return_value={})
+        repo.get_tag_aliases = AsyncMock(return_value={})
+        repo.record_tag_alias = AsyncMock()
 
         service = UnifiedPipelineService(
             llm_provider=llm,

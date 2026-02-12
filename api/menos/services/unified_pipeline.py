@@ -1,5 +1,6 @@
 """Unified pipeline service combining classification and entity extraction in one LLM call."""
 
+import asyncio
 import json
 import logging
 import re
@@ -109,6 +110,16 @@ CONTENT TITLE: {title}
 ## EXISTING TOPICS (strongly prefer these)
 {existing_topics}
 
+## TAG CO-OCCURRENCE PATTERNS
+{tag_cooccurrence}
+
+## QUALITY DISTRIBUTION (calibrate your ratings)
+Current distribution: {tier_distribution}
+Aim for a balanced distribution. Most content should be B or C tier.
+
+## KNOWN ALIASES
+{known_aliases}
+
 ## RULES
 
 ### Tags
@@ -176,6 +187,7 @@ def parse_unified_response(
     data: dict[str, Any],
     existing_tags: list[str],
     settings: Settings,
+    alias_mappings: list[tuple[str, str]] | None = None,
 ) -> UnifiedResult | None:
     """Parse and validate a unified LLM response.
 
@@ -241,6 +253,10 @@ def parse_unified_response(
 
         existing_match = _dedup_label(new_tag, existing_tags + tags)
         if existing_match:
+            if alias_mappings is not None and normalize_name(new_tag) != normalize_name(
+                existing_match
+            ):
+                alias_mappings.append((new_tag, existing_match))
             if existing_match not in tags:
                 tags.append(existing_match)
         else:
@@ -389,6 +405,51 @@ class UnifiedPipelineService:
             return with_context(f"pipeline:{job_id}")
         return self.llm
 
+    @staticmethod
+    def _format_cooccurrence(cooccurrence: dict[str, list[str]]) -> str:
+        if not cooccurrence:
+            return "None yet"
+        lines = [
+            f"- {tag} often appears with: {', '.join(related_tags)}"
+            for tag, related_tags in sorted(cooccurrence.items())
+            if related_tags
+        ]
+        return "\n".join(lines) if lines else "None yet"
+
+    @staticmethod
+    def _format_distribution(distribution: dict[str, int]) -> str:
+        if not distribution:
+            return "No data"
+        total = sum(max(count, 0) for count in distribution.values())
+        if total <= 0:
+            return "No data"
+
+        parts = []
+        for tier in ["S", "A", "B", "C", "D"]:
+            count = max(distribution.get(tier, 0), 0)
+            pct = round((count / total) * 100)
+            parts.append(f"{tier}={pct}%")
+        return ", ".join(parts)
+
+    @staticmethod
+    def _format_aliases(aliases: dict[str, str]) -> str:
+        if not aliases:
+            return "None yet"
+        return ", ".join(f"{variant} -> {canonical}" for variant, canonical in aliases.items())
+
+    async def _resolve_prompt_topics(self, existing_topics: list[str] | None) -> list[str]:
+        if existing_topics:
+            return existing_topics
+
+        topic_entities = await self.repo.get_topic_hierarchy()
+        topics = []
+        for topic in topic_entities:
+            if topic.hierarchy:
+                topics.append(" > ".join(topic.hierarchy))
+            elif topic.name:
+                topics.append(topic.name)
+        return topics
+
     async def process(
         self,
         content_id: str,
@@ -422,7 +483,6 @@ class UnifiedPipelineService:
             return None
 
         pre_detected = pre_detected or []
-        existing_topics = existing_topics or []
 
         # Truncate content to 10k chars
         t0 = time.monotonic()
@@ -437,24 +497,37 @@ class UnifiedPipelineService:
             truncation_ms,
         )
 
-        # Get existing tags
+        # Fetch prompt context
         t0 = time.monotonic()
         try:
-            tags_data = await self.repo.list_tags_with_counts()
+            (
+                tags_data,
+                prompt_topics,
+                tag_cooccurrence,
+                tier_distribution,
+                known_aliases,
+            ) = await asyncio.gather(
+                self.repo.list_tags_with_counts(),
+                self._resolve_prompt_topics(existing_topics),
+                self.repo.get_tag_cooccurrence(),
+                self.repo.get_tier_distribution(),
+                self.repo.get_tag_aliases(),
+            )
             existing_tags = [t["name"] for t in tags_data]
         except Exception as e:
             raise PipelineStageError(
-                "tag_fetch",
-                "TAG_FETCH_ERROR",
+                "context_fetch",
+                "CONTEXT_FETCH_ERROR",
                 str(e)[:500],
             ) from e
-        tag_fetch_ms = int((time.monotonic() - t0) * 1000)
+        context_fetch_ms = int((time.monotonic() - t0) * 1000)
         logger.info(
-            "stage.tag_fetch job_id=%s content_id=%s ms=%d tags=%d",
+            "stage.context_fetch job_id=%s content_id=%s ms=%d tags=%d topics=%d",
             job_id,
             content_id,
-            tag_fetch_ms,
+            context_fetch_ms,
             len(existing_tags),
+            len(prompt_topics),
         )
 
         # Format pre-detected entities for prompt
@@ -470,8 +543,11 @@ class UnifiedPipelineService:
             indent=2,
         )
 
-        # Format existing topics
-        topics_str = ", ".join(existing_topics[:20]) if existing_topics else "None yet"
+        # Format prompt context
+        topics_str = ", ".join(prompt_topics[:20]) if prompt_topics else "None yet"
+        cooccurrence_str = self._format_cooccurrence(tag_cooccurrence)
+        distribution_str = self._format_distribution(tier_distribution)
+        aliases_str = self._format_aliases(known_aliases)
 
         # Build prompt
         prompt = UNIFIED_PROMPT_TEMPLATE.format(
@@ -480,6 +556,9 @@ class UnifiedPipelineService:
             existing_tags=(", ".join(existing_tags[:50]) if existing_tags else "None yet"),
             pre_detected_entities_json=pre_detected_json,
             existing_topics=topics_str,
+            tag_cooccurrence=cooccurrence_str,
+            tier_distribution=distribution_str,
+            known_aliases=aliases_str,
             max_new_tags=self.settings.unified_pipeline_max_new_tags,
             content_text=truncated,
         )
@@ -520,7 +599,8 @@ class UnifiedPipelineService:
                 f"Empty unified pipeline response for {content_id}",
             )
 
-        result = parse_unified_response(data, existing_tags, self.settings)
+        alias_mappings: list[tuple[str, str]] = []
+        result = parse_unified_response(data, existing_tags, self.settings, alias_mappings)
         if result is None:
             raise PipelineStageError(
                 "parse",
@@ -538,6 +618,15 @@ class UnifiedPipelineService:
         # Record model name and timestamp
         result.model = getattr(llm_provider, "model", "fallback_chain")
         result.processed_at = datetime.now(UTC).isoformat()
+
+        if alias_mappings:
+            unique_aliases = sorted(set(alias_mappings))
+            await asyncio.gather(
+                *[
+                    self.repo.record_tag_alias(variant=variant, canonical=canonical)
+                    for variant, canonical in unique_aliases
+                ]
+            )
 
         logger.info(
             "pipeline.complete job_id=%s content_id=%s tier=%s score=%d tags=%s topics=%d",
