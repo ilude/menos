@@ -137,31 +137,38 @@ Build a single `POST /api/v1/ingest` endpoint that accepts any URL, auto-detects
 - Request model: `{"url": str}`
 - Response model: `{"content_id": str, "content_type": str, "title": str, "job_id": str | None}`
 - URL type detection:
-  - YouTube regex: `re.compile(r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]+)")`
-  - If YouTube → delegate to existing YouTube ingestion logic (reuse `YouTubeService`, `PipelineOrchestrator`)
-  - Else → assume web article, call `DoclingClient.extract_markdown`
+  - Use existing `URLDetector` service as the source of truth for URL classification
+  - If detector identifies YouTube → delegate to existing YouTube ingestion logic (reuse `YouTubeService`, `PipelineOrchestrator`)
+  - If detector identifies web/article URL → call `DoclingClient.extract_markdown`
+  - If detector returns unsupported/unknown classification, fallback to Docling web ingestion path (do not reject solely on unknown classification)
 - Deduplication:
   - YouTube: resource key `yt:{video_id}` (existing pattern)
-  - Web: resource key `url:{sha256(normalized_url)}` (normalize: lowercase domain, remove trailing slash, strip `www.`)
+  - Web: resource key `url:{sha256(canonical_url)}`
+  - Canonical URL normalization must be deterministic: lowercase host, strip `www.`, remove trailing slash, remove fragment, sort query params, and apply hybrid tracking-param stripping (case-insensitive): strip `utm_*`, strip keys ending in `clid`, and strip explicit keys `gbraid`, `wbraid`, `mc_cid`, `mc_eid`, `hsenc`, `_hsmi`, `hsctatracking`
   - Check if resource key exists in DB before ingesting
-  - If exists, return existing `content_id` (idempotent)
+  - If exists, return existing content, do not enqueue a new pipeline job, and return `job_id: null` (idempotent)
 - Web ingestion flow:
-  1. Normalize URL
+  1. Canonicalize URL deterministically
   2. Check for existing resource key
-  3. Call Docling to extract Markdown
-  4. Store Markdown in MinIO at `web/{url_hash}/content.md`
-  5. Create content record in SurrealDB (content_type: `web`, title from Docling, file_path, resource_key)
-  6. Submit to pipeline orchestrator
-  7. Return response
+  3. If duplicate, return existing content with `job_id: null` and skip pipeline enqueue
+  4. Call Docling to extract Markdown
+  5. Store Markdown in MinIO at `web/{url_hash}/content.md`
+  6. Create content record in SurrealDB (content_type: `web`, title from Docling, file_path, resource_key)
+  7. Submit to pipeline orchestrator
+  8. Return response
 - Register router in `main.py` with prefix `/api/v1`
 
 **Acceptance:**
 - [ ] `POST /api/v1/ingest` endpoint defined
 - [ ] Accepts `{"url": str}` request body
-- [ ] Detects YouTube URLs (regex) → routes to YouTube ingestion
+- [ ] Uses `URLDetector` as source of truth for URL classification and routing
+- [ ] Detects YouTube URLs → routes to YouTube ingestion
 - [ ] Detects web URLs → routes to Docling extraction
+- [ ] `URLDetector` unsupported/unknown classifications fall back to Docling web ingestion path (no classification-only rejection)
 - [ ] Creates resource key for deduplication (`yt:VIDEO_ID` or `url:SHA256`)
+- [ ] Canonicalizes web URLs deterministically (lowercase host, strip `www.`, remove trailing slash/fragment, sort query params, hybrid case-insensitive tracking-param stripping)
 - [ ] Checks for duplicate resource key before ingesting
+- [ ] Duplicate ingest returns existing content, does not enqueue pipeline, and returns `job_id: null`
 - [ ] Stores Markdown in MinIO at `web/{hash}/content.md`
 - [ ] Creates content record in SurrealDB with `content_type: web`
 - [ ] Submits to pipeline orchestrator (same as YouTube flow)
@@ -183,10 +190,11 @@ Build a single `POST /api/v1/ingest` endpoint that accepts any URL, auto-detects
   - Test error handling (Docling unavailable, bad response)
 - Test ingest router:
   - Mock `DoclingClient`, `YouTubeService`, `SurrealDBRepository`, `MinIOStorage`, `PipelineOrchestrator`
-  - Test YouTube URL detection → routes to YouTube flow
-  - Test web URL → routes to Docling flow
-  - Test deduplication (existing resource key returns existing content)
-  - Test URL normalization (www removal, trailing slash)
+  - Test URL classification via `URLDetector` → routes to YouTube flow
+  - Test URL classification via `URLDetector` → routes to Docling flow
+  - Test `URLDetector` unsupported/unknown classification → falls back to Docling web flow (not rejected on classification)
+  - Test deduplication (existing resource key returns existing content, does not enqueue pipeline, returns `job_id: null`)
+  - Test canonicalization determinism (www removal, host lowercase, fragment removal, trailing slash removal, query param sorting, case-insensitive hybrid tracking-param stripping: `utm_*`, keys ending `clid`, explicit keys `gbraid`, `wbraid`, `mc_cid`, `mc_eid`, `hsenc`, `_hsmi`, `hsctatracking`)
   - Test error cases (Docling unavailable, invalid URL)
 
 **Acceptance:**
@@ -194,10 +202,11 @@ Build a single `POST /api/v1/ingest` endpoint that accepts any URL, auto-detects
 - [ ] Tests verify correct Docling API call (payload, headers)
 - [ ] Tests verify Markdown extraction and error handling
 - [ ] `test_ingest_router.py` covers URL routing logic
-- [ ] Tests verify YouTube detection and delegation
+- [ ] Tests verify `URLDetector`-based detection and delegation
+- [ ] Tests verify `URLDetector` unsupported/unknown classifications fall back to Docling web path
 - [ ] Tests verify web URL extraction and storage
-- [ ] Tests verify deduplication behavior (idempotent on re-ingest)
-- [ ] Tests verify URL normalization (www, trailing slash)
+- [ ] Tests verify deduplication behavior (idempotent on re-ingest, no pipeline enqueue, `job_id: null`)
+- [ ] Tests verify deterministic URL canonicalization (host casing, www, fragment, trailing slash, query sorting, and case-insensitive hybrid tracking-param stripping)
 - [ ] All tests pass (`uv run pytest tests/unit/ -v`)
 - [ ] No linter warnings (`uv run ruff check menos/`)
 
@@ -228,11 +237,17 @@ Wave 2 (API Implementation)
 - Docs: https://github.com/DS4SD/docling-serve
 
 **URL Normalization Strategy:**
-- Lowercase domain
+- Deterministic canonicalization before hashing
+- Lowercase host
 - Remove `www.` prefix
 - Remove trailing slash
-- Keep path, query params (for article specificity)
-- SHA-256 hash of normalized URL for resource key
+- Remove fragment (`#...`)
+- Sort query params deterministically
+- Strip tracking params using hybrid case-insensitive policy:
+  - strip `utm_*`
+  - strip keys ending in `clid`
+  - strip explicit keys: `gbraid`, `wbraid`, `mc_cid`, `mc_eid`, `hsenc`, `_hsmi`, `hsctatracking`
+- SHA-256 hash of canonical URL for resource key
 
 **Future Enhancements** (out of scope):
 - Support for arXiv, GitHub repos, PyPI, npm (use existing `URLDetector` patterns)

@@ -21,9 +21,10 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
 
 | Task | Est. Files | Change Type | Model | Agent |
 |------|-----------|-------------|-------|-------|
+| M1: `tag_alias` migration | 1 (new `.surql` migration) | New migration | Sonnet 4.5 | Builder |
 | T1: Storage queries | 2 (storage.py, test_storage.py) | Add methods | Sonnet 4.5 | Builder |
-| T2: Prompt injection | 2 (unified_pipeline.py, test_unified_pipeline.py) | Modify existing | Sonnet 4.5 | Builder |
-| T3: Tag alias tracking | 3 (storage.py, unified_pipeline.py, test) | Add tracking | Sonnet 4.5 | Builder |
+| T2: Prompt injection (async fetch) | 2 (unified_pipeline.py, test_unified_pipeline.py) | Modify existing | Sonnet 4.5 | Builder |
+| T3: Tag alias tracking (dedicated table) | 3 (storage.py, unified_pipeline.py, test) | Add tracking | Sonnet 4.5 | Builder |
 | V1: Integration test | 1 (new test file) | New test | Sonnet 4.5 | Builder |
 
 ## Team Members
@@ -34,6 +35,22 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
 ## Execution Waves
 
 ### Wave 1: Storage Query Methods
+
+- **M1: Create dedicated `tag_alias` table migration**
+
+  Create a new migration file under `api/migrations/` using the standard naming pattern:
+  - `api/migrations/YYYYMMDD-HHMMSS_create_tag_alias_table.surql`
+
+  Migration content should define dedicated alias persistence structures for variant -> canonical tracking:
+  - `DEFINE TABLE IF NOT EXISTS tag_alias SCHEMAFULL;`
+  - Fields for `variant`, `canonical`, `count`, `updated_at` (with safe defaults where applicable)
+  - Uniqueness/indexing needed for upsert semantics on variant/canonical pairs
+
+  **Acceptance Criteria:**
+  - Migration file exists at `api/migrations/YYYYMMDD-HHMMSS_create_tag_alias_table.surql`
+  - Migration uses `IF NOT EXISTS` guards for idempotency
+  - Migration defines dedicated `tag_alias` table and required fields/indexes for alias ranking + upsert behavior
+  - Migration passes local migration checks (`uv run python scripts/migrate.py status` and `uv run python scripts/migrate.py up`)
 
 - **T1: Add feedback signal queries to storage**
 
@@ -49,12 +66,13 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
      - Return: `{"S": 5, "A": 42, "B": 180, "C": 60, "D": 8}`
 
   3. `get_tag_aliases(limit: int = 50) -> dict[str, str]`
-     - Query historical tag normalization patterns (defer implementation detail to builder)
+     - Query historical tag normalization patterns from dedicated `tag_alias` table
      - Return: `{"langchain": "LangChain", "open-ai": "openai", "k8s": "kubernetes"}`
-     - Note: May require new table or computed from dedup history
+     - Source of truth: `tag_alias` table (variant -> canonical, with count/updated_at for ranking)
 
   **Acceptance Criteria:**
   - All three methods implemented in `storage.py`
+  - `get_tag_aliases()` reads from dedicated `tag_alias` table
   - Unit tests in `test_storage.py` with mocked SurrealDB responses
   - Methods handle empty results gracefully (return empty dict)
   - SurrealDB query syntax validated (no syntax errors on mock calls)
@@ -65,11 +83,15 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
 
   Modify `UnifiedPipelineService.process()` in `api/menos/services/unified_pipeline.py`:
 
-  1. Fetch feedback data alongside existing tag fetch:
+  1. Fetch feedback data asynchronously and concurrently in prompt assembly:
      ```python
-     tag_cooccurrence = self.storage.get_tag_cooccurrence()
-     tier_dist = self.storage.get_tier_distribution()
-     tag_aliases = self.storage.get_tag_aliases()
+     existing_tags, existing_topics, tag_cooccurrence, tier_dist, tag_aliases = await asyncio.gather(
+         self.storage.get_popular_tags(limit=50),
+         self.storage.get_existing_topics(limit=20),
+         self.storage.get_tag_cooccurrence(),
+         self.storage.get_tier_distribution(),
+         self.storage.get_tag_aliases(),
+     )
      ```
 
   2. Add three new sections to prompt template after `## EXISTING TOPICS`:
@@ -93,6 +115,8 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
 
   **Acceptance Criteria:**
   - Prompt template includes all three new sections
+  - Storage fetches used for prompt context are awaited and executed via `asyncio.gather`
+  - Unit tests verify concurrent async fetch orchestration (all feedback methods awaited once)
   - Formatting helpers implemented as private methods
   - Unit tests verify prompt format with sample feedback data
   - Empty feedback data handled gracefully (sections still present but show "None" or "No data")
@@ -100,25 +124,26 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
 
 ### Wave 3: Tag Alias Tracking
 
-- **T3: Log tag normalizations for alias feedback**
+- **T3: Log tag normalizations for alias feedback** (blockedBy: [M1, T2])
 
   Capture when `parse_unified_response()` maps a variant to canonical form via Levenshtein:
 
   1. In `unified_pipeline.py`, add logging/storage call when tag deduplication occurs
   2. Store mapping: `self.storage.record_tag_alias(variant="langchain", canonical="LangChain")`
-  3. Implement `record_tag_alias()` in storage.py (choose approach: dedicated table vs. computed)
+  3. Implement `record_tag_alias()` in storage.py using dedicated `tag_alias` table
   4. Update `get_tag_aliases()` to query stored mappings
 
   **Acceptance Criteria:**
   - Tag normalization events captured during `parse_unified_response()`
-  - `record_tag_alias()` implemented in storage.py
+  - `record_tag_alias()` implemented in storage.py using upsert semantics on `tag_alias`
+  - `tag_alias` table is the only persistence path for alias history
   - Unit test verifies alias recording on Levenshtein match
-  - `get_tag_aliases()` returns recorded mappings
+  - Unit test verifies `get_tag_aliases()` reads back mappings from `tag_alias`
   - No performance regression (alias recording is async/batched if needed)
 
 ### Wave 4: Validation
 
-- **V1: Integration test for feedback loop** (blockedBy: [T1, T2, T3])
+- **V1: Integration test for feedback loop** (blockedBy: [M1, T1, T2, T3])
 
   Create `api/tests/unit/test_pipeline_feedback.py`:
 
@@ -126,7 +151,9 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
   2. Run pipeline with mocked LLM
   3. Assert prompt contains all three feedback sections
   4. Verify formatting of each section matches expected template
-  5. Test edge cases: empty feedback, very large co-occurrence lists
+  5. Verify async correctness: concurrent fetch path awaits all feedback calls
+  6. Test edge cases: empty feedback, very large co-occurrence lists
+  7. Verify alias persistence interactions target `tag_alias` table contract
 
   **Acceptance Criteria:**
   - New test file with ≥5 test cases
@@ -137,18 +164,20 @@ Inject learned context into the unified pipeline LLM prompt to improve tagging c
 ## Dependency Graph
 
 ```
-T1 (Storage queries)
+M1 (`tag_alias` migration)
+  ↓
+T1 (Storage queries) ← depends on M1
   ↓
 T2 (Prompt injection) ← depends on T1
   ↓
-T3 (Alias tracking) ← depends on T1, T2
+T3 (Alias tracking) ← depends on M1, T1, T2
   ↓
-V1 (Integration test) ← depends on T1, T2, T3
+V1 (Integration test) ← depends on M1, T1, T2, T3
 ```
 
 ## Notes
 
-- **No migration required** unless T3 needs dedicated table (decision deferred to builder)
+- **Migration required**: create dedicated `tag_alias` table for alias persistence
 - **Prompt only**: LLM decides whether to use hints; no auto-apply post-processing
-- **Performance**: All queries run once per pipeline invocation; cache if latency issues arise
+- **Performance**: Feedback/storage queries for prompt context run concurrently via `asyncio.gather`; cache if latency issues arise
 - **Future work**: Track hint effectiveness (did LLM follow co-occurrence patterns?)

@@ -30,8 +30,10 @@ Current state:
 Target state:
 - Both endpoints accept `tier_min` parameter (S/A/B/C/D quality tier)
 - Tier filter uses `WHERE tier IN $valid_tiers` where valid_tiers is computed from tier_min
-- Tags filter uses CONTAINSANY (match any provided tag) instead of CONTAINSALL
+- Tags filter uses `CONTAINSANY` (match any provided tag)
 - Agent service passes filters through to all sub-queries during retrieval stage
+- Router/API layer strictly validates `tier_min` to `S/A/B/C/D` and normalizes case
+- When `tier_min` is provided, records with `tier = NULL` are excluded
 
 ## Complexity Analysis
 
@@ -73,12 +75,14 @@ Target state:
   - Add helper function `_compute_valid_tiers(tier_min: str | None) -> list[str]` to return tiers >= tier_min
   - Modify vector search queries in both files to accept optional `tier_min` parameter
   - Add `AND content_id.tier IN $valid_tiers` to WHERE clauses when tier_min provided
+  - Keep internal service logic defensive for invalid/None inputs (no crash, safe no-filter behavior when unset)
   - Write unit tests for tier filtering logic
 
   **Acceptance Criteria**:
   - Helper function returns correct tier lists (e.g., tier_min="B" returns ["S", "A", "B"])
   - Vector search queries in agent.py and search.py accept tier_min parameter
-  - WHERE clauses include tier filtering when tier_min is provided
+  - WHERE clauses include tier filtering when tier_min is provided, excluding `tier = NULL` records in that case
+  - Internal service behavior remains defensive for invalid/None inputs
   - Unit tests verify tier filter logic for all tier levels (S/A/B/C/D)
 
 ### Wave 2: API Layer Integration
@@ -87,12 +91,13 @@ Target state:
 - **T3: Add tier_min to search request models** [Sonnet] — Router Builder
   - Add `tier_min: str | None = None` to `SearchQuery` model in `api/menos/routers/search.py`
   - Add `tier_min: str | None = None` to `AgenticSearchQuery` model
+  - Add strict API validation for `tier_min` (only S/A/B/C/D) with case normalization to uppercase
   - Pass tier_min parameter to storage/agent service calls
   - Update endpoint docstrings to document tier filtering
 
   **Acceptance Criteria**:
-  - SearchQuery model has tier_min field with validation (must be S/A/B/C/D if provided)
-  - AgenticSearchQuery model has tier_min field
+  - SearchQuery model has tier_min field with strict validation (must be S/A/B/C/D if provided) and uppercase normalization
+  - AgenticSearchQuery model has the same strict validation and normalization behavior
   - Parameters passed through to backend services
   - Docstrings explain tier filtering behavior
 
@@ -116,14 +121,14 @@ Target state:
   - Test basic vector search with tier filtering
   - Test agentic search with tier filtering
   - Test combined filters (tier + tags + content_type)
-  - Test edge cases (invalid tier, no results, etc.)
+  - Test edge cases (invalid tier rejected at API layer, no results, etc.)
   - Verify results respect tier boundaries
 
   **Acceptance Criteria**:
   - Integration tests cover both search endpoints
   - Tests verify tier filtering works correctly (tier_min="A" excludes B/C/D content)
   - Combined filter tests (tier + tags) pass
-  - Edge case tests pass
+  - Edge case tests pass, including invalid `tier_min` request validation
   - All tests pass with `uv run pytest tests/integration/test_fused_search.py -v`
 
 ## Dependency Graph
@@ -146,14 +151,21 @@ Quality tiers follow this hierarchy: **S > A > B > C > D**
 
 ### Tags Filter Change
 Current implementation uses `CONTAINSALL` (AND logic: content must have ALL tags).
-**Decision**: Keep CONTAINSALL for now. CONTAINSANY change can be a separate task if needed.
+**Decision**: Use `CONTAINSANY` (OR logic: content can match any provided tag).
+
+### Tier Validation Contract
+- Router/API layer is strict: accept only `S/A/B/C/D` for `tier_min`, normalize input case to uppercase.
+- Internal services remain defensive: tolerate `None`/unexpected values without crashing.
+
+### Tier NULL Behavior
+When `tier_min` is provided, records with `tier = NULL` are excluded from results.
 
 ### SurrealDB Query Pattern
 ```surrealql
 WHERE embedding != NONE
   AND vector::similarity::cosine(embedding, $embedding) > 0.3
   AND content_id.tier IN $valid_tiers  -- Added tier filter
-  AND content_id.tags CONTAINSALL $tags  -- Existing tag filter
+  AND content_id.tags CONTAINSANY $tags  -- Tag OR matching
 ORDER BY score DESC
 LIMIT $limit
 ```
@@ -172,7 +184,6 @@ The agent service generates multiple queries, runs vector search for each, and f
 
 ## Future Extensions
 
-- CONTAINSANY option for tags (match any tag instead of all)
 - Date range filters (created_at, updated_at)
 - Metadata field filters (e.g., YouTube channel_id)
 - Tier-based result boosting (increase score for higher tiers)
