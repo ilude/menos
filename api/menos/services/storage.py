@@ -1,5 +1,6 @@
 """Storage services for MinIO and SurrealDB."""
 
+import re
 from datetime import UTC, datetime
 from typing import BinaryIO
 
@@ -14,6 +15,7 @@ from menos.models import (
     EntityModel,
     EntityType,
     LinkModel,
+    RelatedContent,
 )
 from menos.services.normalization import normalize_name
 from menos.services.version_utils import has_version_drift, parse_version_tuple
@@ -604,6 +606,106 @@ class SurrealDBRepository:
         edges = list(all_edges.values())
 
         return nodes, edges
+
+    async def get_related_content(
+        self,
+        content_id: str,
+        limit: int = 10,
+        window: str = "12m",
+    ) -> list[RelatedContent]:
+        """Find content related through shared entities.
+
+        Args:
+            content_id: Source content to find relations for
+            limit: Maximum number of related items to return
+            window: Recency filter (`0` for all, otherwise `^\\d+[mwd]$`)
+
+        Returns:
+            List of related content sorted by ranking rules
+        """
+        if window != "0" and not re.match(r"^\d+[mwd]$", window):
+            raise ValueError("window must be '0' or match ^\\d+[mwd]$")
+
+        recency_clause = ""
+        if window != "0":
+            recency_clause = f"AND candidate.created_at >= time::now() - {window}"
+
+        query = f"""
+            SELECT
+                candidate.id AS content_id,
+                candidate.title AS title,
+                candidate.content_type AS content_type,
+                count(array::distinct(entity_id)) AS shared_entity_count,
+                array::sort(array::distinct(shared_entity_names)) AS shared_entities,
+                candidate.created_at AS created_at
+            FROM (
+                SELECT
+                    ce_other.content_id AS candidate,
+                    ce_source.entity_id AS entity_id,
+                    ce_source.entity_id.name AS shared_entity_names
+                FROM content_entity AS ce_source,
+                    (SELECT content_id FROM content_entity
+                     WHERE entity_id = ce_source.entity_id) AS ce_other
+                WHERE ce_source.content_id = $source_content_id
+                    AND ce_other.content_id != $source_content_id
+            )
+            GROUP BY candidate
+            HAVING shared_entity_count >= 2
+            {recency_clause}
+            ORDER BY shared_entity_count DESC, created_at DESC, content_id ASC
+            LIMIT $limit
+        """
+
+        result = self.db.query(
+            query,
+            {
+                "source_content_id": RecordID("content", content_id),
+                "limit": limit,
+            },
+        )
+        raw_items = self._parse_query_result(result)
+
+        def parse_created_at(value) -> datetime:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+            return datetime.min.replace(tzinfo=UTC)
+
+        related_items: list[tuple[RelatedContent, datetime]] = []
+        for item in raw_items:
+            parsed_id = self._stringify_record_id(item.get("content_id"))
+            if parsed_id in {content_id, f"content:{content_id}"}:
+                continue
+
+            shared_entity_count = int(item.get("shared_entity_count", 0) or 0)
+            if shared_entity_count < 2:
+                continue
+
+            shared_entities = item.get("shared_entities")
+            if not isinstance(shared_entities, list):
+                shared_entities = []
+
+            related = RelatedContent(
+                content_id=parsed_id,
+                title=item.get("title") or "",
+                content_type=item.get("content_type") or "",
+                shared_entity_count=shared_entity_count,
+                shared_entities=[str(entity) for entity in shared_entities],
+            )
+            related_items.append((related, parse_created_at(item.get("created_at"))))
+
+        related_items.sort(
+            key=lambda item: (
+                -item[0].shared_entity_count,
+                -item[1].timestamp(),
+                item[0].content_id,
+            )
+        )
+        return [related for related, _ in related_items]
 
     # ==================== Record Parsing Helpers ====================
 

@@ -100,6 +100,16 @@ class ContentMetadata(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RelatedContent(BaseModel):
+    """Content item related through shared entities."""
+
+    content_id: str
+    title: str
+    content_type: str
+    shared_entity_count: int
+    shared_entities: list[str]
+
+
 class LinkModel(BaseModel):
     """Link between content items."""
 

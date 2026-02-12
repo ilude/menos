@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
+from menos.models import RelatedContent
 from menos.services.di import get_surreal_repo
 from menos.services.storage import SurrealDBRepository
 
 router = APIRouter(prefix="/graph", tags=["graph"])
+content_router = APIRouter(prefix="/content", tags=["graph"])
 
 
 class GraphNode(BaseModel):
@@ -138,3 +140,22 @@ async def get_neighborhood(
     ]
 
     return GraphData(nodes=nodes, edges=edges)
+
+
+@content_router.get("/{content_id}/related", response_model=list[RelatedContent])
+async def get_related_content(
+    content_id: str,
+    key_id: AuthenticatedKeyId,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    window: Annotated[
+        str,
+        Query(pattern=r"^(0|\d+[mwd])$", description="0 or duration like 12m, 2w, 30d"),
+    ] = "12m",
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get content related by shared entities."""
+    content = await surreal_repo.get_content(content_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    return await surreal_repo.get_related_content(content_id=content_id, limit=limit, window=window)

@@ -2075,3 +2075,117 @@ class TestGetNeighborhood:
 
         assert len(nodes) == 1
         assert len(edges) == 0
+
+
+class TestGetRelatedContent:
+    """Tests for get_related_content."""
+
+    @pytest.mark.asyncio
+    async def test_get_related_content_filters_and_ranks_results(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "content_id": "content:b-item",
+                        "title": "B item",
+                        "content_type": "document",
+                        "shared_entity_count": 2,
+                        "shared_entities": ["tool:uv", "topic:python"],
+                        "created_at": "2026-01-10T10:00:00Z",
+                    },
+                    {
+                        "content_id": "content:a-item",
+                        "title": "A item",
+                        "content_type": "youtube",
+                        "shared_entity_count": 3,
+                        "shared_entities": ["topic:python", "repo:uv", "person:astral"],
+                        "created_at": "2026-01-05T10:00:00Z",
+                    },
+                    {
+                        "content_id": "content:c-item",
+                        "title": "C item",
+                        "content_type": "document",
+                        "shared_entity_count": 3,
+                        "shared_entities": ["topic:python", "repo:uv", "person:astral"],
+                        "created_at": "2026-01-05T10:00:00Z",
+                    },
+                    {
+                        "content_id": "content:source-id",
+                        "title": "Source",
+                        "content_type": "document",
+                        "shared_entity_count": 4,
+                        "shared_entities": ["topic:python", "repo:uv", "person:astral"],
+                        "created_at": "2026-01-20T10:00:00Z",
+                    },
+                    {
+                        "content_id": "content:below-threshold",
+                        "title": "Below threshold",
+                        "content_type": "document",
+                        "shared_entity_count": 1,
+                        "shared_entities": ["topic:python"],
+                        "created_at": "2026-01-20T10:00:00Z",
+                    },
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        related = await repo.get_related_content("source-id", limit=10, window="12m")
+
+        assert [item.content_id for item in related] == ["a-item", "c-item", "b-item"]
+        assert related[0].shared_entity_count == 3
+        assert related[0].shared_entities == ["topic:python", "repo:uv", "person:astral"]
+
+        call_args = mock_db.query.call_args[0]
+        assert "HAVING shared_entity_count >= 2" in call_args[0]
+        assert "ORDER BY shared_entity_count DESC, created_at DESC, content_id ASC" in call_args[0]
+        assert "candidate.created_at >= time::now() - 12m" in call_args[0]
+        assert "entity_type" not in call_args[0]
+        assert call_args[1]["source_content_id"] == RecordID("content", "source-id")
+        assert call_args[1]["limit"] == 10
+
+    @pytest.mark.asyncio
+    async def test_get_related_content_window_zero_disables_recency_filter(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value = [{"result": []}]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        related = await repo.get_related_content("source-id", window="0")
+
+        assert related == []
+        query = mock_db.query.call_args[0][0]
+        assert "candidate.created_at >= time::now()" not in query
+
+    @pytest.mark.asyncio
+    async def test_get_related_content_handles_record_id_values(self):
+        mock_db = MagicMock()
+        mock_content_id = MagicMock(spec=["id"])
+        mock_content_id.id = "content:rid-item"
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "content_id": mock_content_id,
+                        "title": "RID item",
+                        "content_type": "document",
+                        "shared_entity_count": 2,
+                        "shared_entities": ["topic:python", "tool:uv"],
+                        "created_at": "2026-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        related = await repo.get_related_content("source-id")
+
+        assert len(related) == 1
+        assert related[0].content_id == "content:rid-item"
+
+    @pytest.mark.asyncio
+    async def test_get_related_content_invalid_window_raises(self):
+        repo = SurrealDBRepository(MagicMock(), "ns", "db")
+
+        with pytest.raises(ValueError, match="window must"):
+            await repo.get_related_content("source-id", window="12x")
