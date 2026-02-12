@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
+from menos.config import settings
 from menos.models import JobStatus
 from menos.services.di import (
     get_job_repository,
@@ -70,6 +71,23 @@ class CancelResponse(BaseModel):
     job_id: str
     status: str
     message: str
+
+
+class VersionCount(BaseModel):
+    """Count of completed content items by pipeline version."""
+
+    version: str
+    count: int
+
+
+class DriftReportResponse(BaseModel):
+    """Version drift report for completed content."""
+
+    current_version: str
+    stale_content: list[VersionCount]
+    total_stale: int
+    unknown_version_count: int
+    total_content: int
 
 
 # -- Reprocess endpoint --
@@ -144,6 +162,36 @@ async def reprocess_content(
 
 
 # -- Job management endpoints --
+
+
+@jobs_router.get("/drift", response_model=DriftReportResponse)
+async def get_jobs_drift_report(
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get version drift report for completed content."""
+    del key_id
+
+    report = await surreal_repo.get_version_drift_report(settings.app_version)
+    rows = report.get("stale_content") if isinstance(report, dict) else []
+    stale_content = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        stale_content.append(
+            VersionCount(
+                version=str(row.get("version") or ""),
+                count=int(row.get("count") or 0),
+            )
+        )
+
+    return DriftReportResponse(
+        current_version=str(report.get("current_version") or settings.app_version),
+        stale_content=stale_content,
+        total_stale=int(report.get("total_stale") or 0),
+        unknown_version_count=int(report.get("unknown_version_count") or 0),
+        total_content=int(report.get("total_content") or 0),
+    )
 
 
 @jobs_router.get("/{job_id}")

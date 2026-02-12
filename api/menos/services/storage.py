@@ -16,6 +16,7 @@ from menos.models import (
     LinkModel,
 )
 from menos.services.normalization import normalize_name
+from menos.services.version_utils import has_version_drift, parse_version_tuple
 
 
 class MinIOStorage:
@@ -233,19 +234,63 @@ class SurrealDBRepository:
         type_rows = self._parse_query_result(type_result)
 
         total = sum(r.get("count", 0) for r in status_rows)
-        by_status = {
-            (r.get("status") or "none"): r.get("count", 0)
-            for r in status_rows
-        }
-        by_content_type = {
-            r.get("content_type", "unknown"): r.get("count", 0)
-            for r in type_rows
-        }
+        by_status = {(r.get("status") or "none"): r.get("count", 0) for r in status_rows}
+        by_content_type = {r.get("content_type", "unknown"): r.get("count", 0) for r in type_rows}
 
         return {
             "total": total,
             "by_status": by_status,
             "by_content_type": by_content_type,
+        }
+
+    async def get_version_drift_report(self, current_version: str) -> dict:
+        """Get report of completed content with version drift."""
+        grouped_result = self.db.query(
+            "SELECT pipeline_version, count() AS cnt "
+            "FROM content WHERE processing_status = 'completed' GROUP BY pipeline_version"
+        )
+        grouped_rows = self._parse_query_result(grouped_result)
+
+        total_result = self.db.query(
+            "SELECT count() AS count FROM content WHERE processing_status = 'completed' GROUP ALL"
+        )
+        total_rows = self._parse_query_result(total_result)
+
+        stale_content: list[dict[str, str | int]] = []
+        total_stale = 0
+        unknown_version_count = 0
+
+        for row in grouped_rows:
+            version = row.get("pipeline_version")
+            count_raw = row.get("cnt", 0)
+            try:
+                count = int(count_raw)
+            except (TypeError, ValueError):
+                count = 0
+
+            if parse_version_tuple(version) is None:
+                unknown_version_count += count
+                continue
+
+            if has_version_drift(version, current_version):
+                stale_content.append({"version": str(version), "count": count})
+                total_stale += count
+
+        stale_content.sort(key=lambda item: (-int(item["count"]), str(item["version"])))
+
+        total_content = 0
+        if total_rows:
+            try:
+                total_content = int(total_rows[0].get("count", 0))
+            except (TypeError, ValueError):
+                total_content = 0
+
+        return {
+            "current_version": current_version,
+            "stale_content": stale_content,
+            "total_stale": total_stale,
+            "unknown_version_count": unknown_version_count,
+            "total_content": total_content,
         }
 
     async def update_content(self, content_id: str, metadata: ContentMetadata) -> ContentMetadata:

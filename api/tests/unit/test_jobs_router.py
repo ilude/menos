@@ -1,10 +1,11 @@
 """Unit tests for jobs router endpoints."""
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from menos.config import settings
 from menos.models import ContentMetadata, JobStatus, PipelineJob
 
 
@@ -145,6 +146,102 @@ class TestReprocessEndpoint:
 
     def test_auth_required(self, client):
         resp = client.post("/api/v1/content/c1/reprocess")
+        assert resp.status_code == 401
+
+
+class TestVersionDriftReport:
+    def test_report_with_drift(self, authed_client, mock_surreal_repo):
+        mock_surreal_repo.get_version_drift_report = AsyncMock(
+            return_value={
+                "current_version": "0.5.0",
+                "stale_content": [
+                    {"version": "0.4.2", "count": 150},
+                    {"version": "0.3.1", "count": 12},
+                ],
+                "total_stale": 162,
+                "unknown_version_count": 7,
+                "total_content": 500,
+            }
+        )
+
+        resp = authed_client.get("/api/v1/jobs/drift")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_version"] == "0.5.0"
+        assert data["stale_content"] == [
+            {"version": "0.4.2", "count": 150},
+            {"version": "0.3.1", "count": 12},
+        ]
+        assert data["total_stale"] == 162
+        assert data["unknown_version_count"] == 7
+        assert data["total_content"] == 500
+        mock_surreal_repo.get_version_drift_report.assert_awaited_once_with(settings.app_version)
+
+    def test_report_with_no_drift(self, authed_client, mock_surreal_repo):
+        mock_surreal_repo.get_version_drift_report = AsyncMock(
+            return_value={
+                "current_version": "0.5.0",
+                "stale_content": [],
+                "total_stale": 0,
+                "unknown_version_count": 2,
+                "total_content": 23,
+            }
+        )
+
+        resp = authed_client.get("/api/v1/jobs/drift")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["stale_content"] == []
+        assert data["total_stale"] == 0
+        assert data["unknown_version_count"] == 2
+        assert data["total_content"] == 23
+
+    def test_unknown_versions_bucketed_separately(self, authed_client, mock_surreal_repo):
+        mock_surreal_repo.get_version_drift_report = AsyncMock(
+            return_value={
+                "current_version": "0.5.0",
+                "stale_content": [{"version": "0.4.2", "count": 3}],
+                "total_stale": 3,
+                "unknown_version_count": 11,
+                "total_content": 20,
+            }
+        )
+
+        resp = authed_client.get("/api/v1/jobs/drift")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["stale_content"] == [{"version": "0.4.2", "count": 3}]
+        assert data["total_stale"] == 3
+        assert data["unknown_version_count"] == 11
+        assert data["total_content"] == 20
+
+    def test_empty_database(self, authed_client, mock_surreal_repo):
+        mock_surreal_repo.get_version_drift_report = AsyncMock(
+            return_value={
+                "current_version": "0.5.0",
+                "stale_content": [],
+                "total_stale": 0,
+                "unknown_version_count": 0,
+                "total_content": 0,
+            }
+        )
+
+        resp = authed_client.get("/api/v1/jobs/drift")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "current_version": "0.5.0",
+            "stale_content": [],
+            "total_stale": 0,
+            "unknown_version_count": 0,
+            "total_content": 0,
+        }
+
+    def test_auth_required(self, client):
+        resp = client.get("/api/v1/jobs/drift")
         assert resp.status_code == 401
 
 

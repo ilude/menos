@@ -11,7 +11,7 @@ from surrealdb import Surreal
 
 from menos.config import get_settings
 from menos.routers import auth, content, entities, graph, health, jobs, search, usage, youtube
-from menos.services.di import get_llm_pricing_service
+from menos.services.di import get_llm_pricing_service, get_surreal_repo
 from menos.services.migrator import MigrationService
 from menos.tasks import background_tasks
 
@@ -109,11 +109,40 @@ def _run_purge() -> None:
         logger.error("Pipeline job purge failed: %s - app continuing", e)
 
 
+async def _log_version_drift() -> None:
+    """Log startup version drift report without blocking app startup on errors."""
+    settings = get_settings()
+    try:
+        repo = await get_surreal_repo()
+        report = await repo.get_version_drift_report(settings.app_version)
+
+        total_stale = int(report.get("total_stale", 0))
+        current_version = str(report.get("current_version", settings.app_version))
+        unknown_version_count = int(report.get("unknown_version_count", 0))
+
+        if total_stale > 0:
+            logger.info(
+                "version_drift: %d stale items (current=%s, unknown_versions=%d)",
+                total_stale,
+                current_version,
+                unknown_version_count,
+            )
+        else:
+            logger.info(
+                "version_drift: no stale content (current=%s, unknown_versions=%d)",
+                current_version,
+                unknown_version_count,
+            )
+    except Exception as e:
+        logger.warning("version_drift: failed to compute report: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     run_migrations()
     _run_purge()
+    await _log_version_drift()
     pricing_service = await get_llm_pricing_service()
     await pricing_service.start_scheduler()
     try:

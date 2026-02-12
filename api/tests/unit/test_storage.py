@@ -720,9 +720,7 @@ class TestCreateChunkRecordID:
         mock_db.create.return_value = [{"id": mock_rid}]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        chunk = ChunkModel(
-            content_id="test123", text="some text", chunk_index=0
-        )
+        chunk = ChunkModel(content_id="test123", text="some text", chunk_index=0)
         result = await repo.create_chunk(chunk)
         assert result.id == "chunk_abc"
 
@@ -732,9 +730,7 @@ class TestCreateChunkRecordID:
         mock_db.create.return_value = {"id": "chunk:dictret"}
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        chunk = ChunkModel(
-            content_id="test123", text="some text", chunk_index=0
-        )
+        chunk = ChunkModel(content_id="test123", text="some text", chunk_index=0)
         result = await repo.create_chunk(chunk)
         assert result.id == "dictret"
 
@@ -880,12 +876,14 @@ class TestParseEntity:
 
     def test_parse_entity_basic(self):
         repo = self._make_repo()
-        entity = repo._parse_entity({
-            "id": "entity:abc",
-            "entity_type": "topic",
-            "name": "Machine Learning",
-            "normalized_name": "machinelearning",
-        })
+        entity = repo._parse_entity(
+            {
+                "id": "entity:abc",
+                "entity_type": "topic",
+                "name": "Machine Learning",
+                "normalized_name": "machinelearning",
+            }
+        )
         assert entity.id == "abc"
         assert entity.name == "Machine Learning"
         assert entity.entity_type == EntityType.TOPIC
@@ -894,12 +892,14 @@ class TestParseEntity:
         repo = self._make_repo()
         mock_rid = MagicMock(spec=["id"])
         mock_rid.id = "xyz789"
-        entity = repo._parse_entity({
-            "id": mock_rid,
-            "entity_type": "tool",
-            "name": "Docker",
-            "normalized_name": "docker",
-        })
+        entity = repo._parse_entity(
+            {
+                "id": mock_rid,
+                "entity_type": "tool",
+                "name": "Docker",
+                "normalized_name": "docker",
+            }
+        )
         assert entity.id == "xyz789"
 
 
@@ -911,12 +911,14 @@ class TestParseContentEntityEdge:
 
     def test_parse_edge_with_string_ids(self):
         repo = self._make_repo()
-        edge = repo._parse_content_entity_edge({
-            "id": "content_entity:abc",
-            "content_id": "content:c1",
-            "entity_id": "entity:e1",
-            "edge_type": "discusses",
-        })
+        edge = repo._parse_content_entity_edge(
+            {
+                "id": "content_entity:abc",
+                "content_id": "content:c1",
+                "entity_id": "entity:e1",
+                "edge_type": "discusses",
+            }
+        )
         assert edge.id == "abc"
         assert edge.content_id == "c1"
         assert edge.entity_id == "e1"
@@ -927,12 +929,14 @@ class TestParseContentEntityEdge:
         mock_cid.id = "content_abc"
         mock_eid = MagicMock(spec=["id"])
         mock_eid.id = "entity_xyz"
-        edge = repo._parse_content_entity_edge({
-            "id": "content_entity:edge1",
-            "content_id": mock_cid,
-            "entity_id": mock_eid,
-            "edge_type": "mentions",
-        })
+        edge = repo._parse_content_entity_edge(
+            {
+                "id": "content_entity:edge1",
+                "content_id": mock_cid,
+                "entity_id": mock_eid,
+                "edge_type": "mentions",
+            }
+        )
         assert edge.content_id == "content_abc"
         assert edge.entity_id == "entity_xyz"
 
@@ -1029,9 +1033,7 @@ class TestEntityCRUD:
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        result = await repo.update_entity(
-            "e1", {"name": "Deep Learning"}
-        )
+        result = await repo.update_entity("e1", {"name": "Deep Learning"})
 
         assert result is not None
         assert result.name == "Deep Learning"
@@ -1098,9 +1100,7 @@ class TestFindEntityByNormalizedName:
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        result = await repo.find_entity_by_normalized_name(
-            "docker", EntityType.TOOL
-        )
+        result = await repo.find_entity_by_normalized_name("docker", EntityType.TOOL)
 
         assert result is not None
         call_args = mock_db.query.call_args[0]
@@ -1199,9 +1199,7 @@ class TestListEntities:
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        entities, count = await repo.list_entities(
-            entity_type=EntityType.TOPIC
-        )
+        entities, count = await repo.list_entities(entity_type=EntityType.TOPIC)
 
         assert len(entities) == 1
         call_args = mock_db.query.call_args[0]
@@ -1237,9 +1235,7 @@ class TestContentEntityEdgeCRUD:
     @pytest.mark.asyncio
     async def test_create_content_entity_edge(self):
         mock_db = MagicMock()
-        mock_db.create.return_value = [
-            {"id": "content_entity:edge1"}
-        ]
+        mock_db.create.return_value = [{"id": "content_entity:edge1"}]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
         edge = ContentEntityEdge(
@@ -1437,9 +1433,7 @@ class TestFindOrCreateEntity:
         mock_db.query.return_value = [{"result": [existing]}]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        entity, was_created = await repo.find_or_create_entity(
-            "ML", EntityType.TOPIC
-        )
+        entity, was_created = await repo.find_or_create_entity("ML", EntityType.TOPIC)
 
         assert not was_created
         assert entity.name == "ML"
@@ -1466,9 +1460,7 @@ class TestFindOrCreateEntity:
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        entity, was_created = await repo.find_or_create_entity(
-            "ML", EntityType.TOPIC
-        )
+        entity, was_created = await repo.find_or_create_entity("ML", EntityType.TOPIC)
 
         assert not was_created
         assert entity.name == "Machine Learning"
@@ -1484,9 +1476,7 @@ class TestFindOrCreateEntity:
         mock_db.create.return_value = [{"id": "entity:new1"}]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        entity, was_created = await repo.find_or_create_entity(
-            "New Topic", EntityType.TOPIC
-        )
+        entity, was_created = await repo.find_or_create_entity("New Topic", EntityType.TOPIC)
 
         assert was_created
         assert entity.id == "new1"
@@ -1515,9 +1505,7 @@ class TestFindOrCreateEntity:
         mock_db.create.return_value = [{"id": "entity:new2"}]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        entity, was_created = await repo.find_or_create_entity(
-            "Docker", EntityType.TOOL
-        )
+        entity, was_created = await repo.find_or_create_entity("Docker", EntityType.TOOL)
 
         assert was_created
         assert entity.id == "new2"
@@ -1691,9 +1679,7 @@ class TestGetGraphData:
         ]
 
         repo = SurrealDBRepository(mock_db, "ns", "db")
-        nodes, edges = await repo.get_graph_data(
-            tags=["python"], content_type="youtube", limit=100
-        )
+        nodes, edges = await repo.get_graph_data(tags=["python"], content_type="youtube", limit=100)
 
         assert nodes == []
         assert edges == []
@@ -1852,9 +1838,7 @@ class TestUpdateContentProcessingStatus:
         mock_db = MagicMock()
         repo = SurrealDBRepository(mock_db, "ns", "db")
 
-        await repo.update_content_processing_status(
-            "c1", "completed", pipeline_version="1.0.0"
-        )
+        await repo.update_content_processing_status("c1", "completed", pipeline_version="1.0.0")
 
         mock_db.query.assert_called_once()
         call_args = mock_db.query.call_args[0]
@@ -1895,6 +1879,107 @@ class TestUpdateContentProcessingStatus:
         assert call_args[1]["content_id"] == RecordID("content", "c1")
         assert call_args[1]["data"] == result_dict
         assert call_args[1]["pipeline_version"] == "1.0.0"
+
+
+class TestGetVersionDriftReport:
+    """Tests for get_version_drift_report."""
+
+    @pytest.mark.asyncio
+    async def test_report_with_drift(self):
+        mock_db = MagicMock()
+        mock_db.query.side_effect = [
+            [
+                {
+                    "result": [
+                        {"pipeline_version": "0.4.2", "cnt": 5},
+                        {"pipeline_version": "0.3.1", "cnt": 2},
+                        {"pipeline_version": "0.5.1", "cnt": 4},
+                    ]
+                }
+            ],
+            [{"result": [{"count": 11}]}],
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        report = await repo.get_version_drift_report("0.5.0")
+
+        assert report == {
+            "current_version": "0.5.0",
+            "stale_content": [
+                {"version": "0.4.2", "count": 5},
+                {"version": "0.3.1", "count": 2},
+            ],
+            "total_stale": 7,
+            "unknown_version_count": 0,
+            "total_content": 11,
+        }
+
+    @pytest.mark.asyncio
+    async def test_report_with_no_drift(self):
+        mock_db = MagicMock()
+        mock_db.query.side_effect = [
+            [
+                {
+                    "result": [
+                        {"pipeline_version": "0.4.0", "cnt": 2},
+                        {"pipeline_version": "0.4.3", "cnt": 3},
+                    ]
+                }
+            ],
+            [{"result": [{"count": 5}]}],
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        report = await repo.get_version_drift_report("0.4.9")
+
+        assert report["stale_content"] == []
+        assert report["total_stale"] == 0
+        assert report["unknown_version_count"] == 0
+        assert report["total_content"] == 5
+
+    @pytest.mark.asyncio
+    async def test_report_unknown_bucket(self):
+        mock_db = MagicMock()
+        mock_db.query.side_effect = [
+            [
+                {
+                    "result": [
+                        {"pipeline_version": None, "cnt": 1},
+                        {"pipeline_version": "unknown", "cnt": 2},
+                        {"pipeline_version": "bad", "cnt": 3},
+                        {"pipeline_version": "0.4.2", "cnt": 4},
+                    ]
+                }
+            ],
+            [{"result": [{"count": 10}]}],
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        report = await repo.get_version_drift_report("0.5.0")
+
+        assert report["stale_content"] == [{"version": "0.4.2", "count": 4}]
+        assert report["total_stale"] == 4
+        assert report["unknown_version_count"] == 6
+        assert report["total_content"] == 10
+
+    @pytest.mark.asyncio
+    async def test_report_empty(self):
+        mock_db = MagicMock()
+        mock_db.query.side_effect = [
+            [{"result": []}],
+            [{"result": [{"count": 0}]}],
+        ]
+
+        repo = SurrealDBRepository(mock_db, "ns", "db")
+        report = await repo.get_version_drift_report("0.5.0")
+
+        assert report == {
+            "current_version": "0.5.0",
+            "stale_content": [],
+            "total_stale": 0,
+            "unknown_version_count": 0,
+            "total_content": 0,
+        }
 
 
 class TestGetNeighborhood:
