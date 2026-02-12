@@ -2,28 +2,97 @@
 
 import json
 import logging
+import re
+import time
 from datetime import UTC, datetime
 from typing import Any
 
+from Levenshtein import distance
+
 from menos.config import Settings
 from menos.models import (
+    EdgeType,
     EntityType,
     ExtractedEntity,
     PreDetectedValidation,
     UnifiedResult,
 )
-from menos.services.classification import LABEL_PATTERN, VALID_TIERS, _dedup_label
-from menos.services.entity_extraction import (
-    _confidence_to_float,
-    _edge_type_from_string,
-    _entity_type_from_string,
-    _parse_topic_hierarchy,
-)
 from menos.services.llm import LLMProvider
 from menos.services.llm_json import extract_json
+from menos.services.normalization import normalize_name
 from menos.services.storage import SurrealDBRepository
 
 logger = logging.getLogger(__name__)
+
+VALID_TIERS = {"S", "A", "B", "C", "D"}
+LABEL_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _dedup_label(
+    new_label: str,
+    existing_labels: list[str],
+    max_distance: int = 2,
+) -> str | None:
+    """Check if a new label is a near-duplicate of an existing label.
+
+    Uses normalize_name() + Levenshtein distance for deterministic matching.
+
+    Args:
+        new_label: The candidate new label
+        existing_labels: Known labels in the vault
+        max_distance: Maximum edit distance to consider as duplicate
+
+    Returns:
+        Existing label name if duplicate found, None if genuinely new
+    """
+    normalized_new = normalize_name(new_label)
+
+    for existing in existing_labels:
+        normalized_existing = normalize_name(existing)
+        if distance(normalized_new, normalized_existing) <= max_distance:
+            return existing
+
+    return None
+
+
+def _parse_topic_hierarchy(topic_str: str) -> list[str]:
+    """Parse a topic hierarchy string into a list of components.
+
+    "AI > LLMs > RAG" -> ["AI", "LLMs", "RAG"]
+    """
+    parts = [p.strip() for p in topic_str.split(">")]
+    return [p for p in parts if p]
+
+
+def _confidence_to_float(confidence: str) -> float:
+    """Convert confidence string to float value."""
+    mapping = {"high": 0.9, "medium": 0.7, "low": 0.5}
+    return mapping.get(confidence.lower(), 0.6)
+
+
+def _edge_type_from_string(edge_str: str) -> EdgeType:
+    """Convert edge type string to EdgeType enum."""
+    mapping = {
+        "discusses": EdgeType.DISCUSSES,
+        "mentions": EdgeType.MENTIONS,
+        "cites": EdgeType.CITES,
+        "uses": EdgeType.USES,
+        "demonstrates": EdgeType.DEMONSTRATES,
+    }
+    return mapping.get(edge_str.lower(), EdgeType.MENTIONS)
+
+
+def _entity_type_from_string(type_str: str) -> EntityType:
+    """Convert entity type string to EntityType enum."""
+    mapping = {
+        "topic": EntityType.TOPIC,
+        "repo": EntityType.REPO,
+        "paper": EntityType.PAPER,
+        "tool": EntityType.TOOL,
+        "person": EntityType.PERSON,
+    }
+    return mapping.get(type_str.lower(), EntityType.TOPIC)
+
 
 UNIFIED_PROMPT_TEMPLATE = """You are a content analyst. Evaluate the content and provide \
 classification ratings, tags, and entity extraction in a single response.
@@ -93,6 +162,16 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
 }}"""
 
 
+class PipelineStageError(Exception):
+    """Error with pipeline stage context for observability."""
+
+    def __init__(self, stage: str, code: str, message: str):
+        self.stage = stage
+        self.code = code
+        self.message = message
+        super().__init__(f"[{stage}] {code}: {message}")
+
+
 def parse_unified_response(
     data: dict[str, Any],
     existing_tags: list[str],
@@ -152,7 +231,7 @@ def parse_unified_response(
         raw_new_tags = []
 
     new_tags: list[str] = []
-    max_new = settings.classification_max_new_labels
+    max_new = settings.unified_pipeline_max_new_tags
     new_count = 0
     for new_tag in raw_new_tags:
         if new_count >= max_new:
@@ -309,6 +388,7 @@ class UnifiedPipelineService:
         title: str,
         pre_detected: list | None = None,
         existing_topics: list[str] | None = None,
+        job_id: str | None = None,
     ) -> UnifiedResult | None:
         """Run unified classification + entity extraction pipeline.
 
@@ -319,28 +399,54 @@ class UnifiedPipelineService:
             title: Content title
             pre_detected: Pre-detected entity models
             existing_topics: Known topic strings
+            job_id: Pipeline job ID for log correlation
 
         Returns:
             UnifiedResult or None if skipped/failed
         """
         if not self.settings.unified_pipeline_enabled:
-            logger.debug("Unified pipeline disabled, skipping %s", content_id)
+            logger.debug(
+                "Unified pipeline disabled, skipping %s job_id=%s",
+                content_id,
+                job_id,
+            )
             return None
 
         pre_detected = pre_detected or []
         existing_topics = existing_topics or []
 
         # Truncate content to 10k chars
+        t0 = time.monotonic()
         truncated = content_text[:10000]
         if len(content_text) > 10000:
             truncated += "\n\n[Content truncated...]"
+        truncation_ms = int((time.monotonic() - t0) * 1000)
+        logger.info(
+            "stage.truncation job_id=%s content_id=%s ms=%d",
+            job_id,
+            content_id,
+            truncation_ms,
+        )
 
         # Get existing tags
+        t0 = time.monotonic()
         try:
             tags_data = await self.repo.list_tags_with_counts()
             existing_tags = [t["name"] for t in tags_data]
-        except Exception:
-            existing_tags = []
+        except Exception as e:
+            raise PipelineStageError(
+                "tag_fetch",
+                "TAG_FETCH_ERROR",
+                str(e)[:500],
+            ) from e
+        tag_fetch_ms = int((time.monotonic() - t0) * 1000)
+        logger.info(
+            "stage.tag_fetch job_id=%s content_id=%s ms=%d tags=%d",
+            job_id,
+            content_id,
+            tag_fetch_ms,
+            len(existing_tags),
+        )
 
         # Format pre-detected entities for prompt
         pre_detected_json = json.dumps(
@@ -365,11 +471,12 @@ class UnifiedPipelineService:
             existing_tags=(", ".join(existing_tags[:50]) if existing_tags else "None yet"),
             pre_detected_entities_json=pre_detected_json,
             existing_topics=topics_str,
-            max_new_tags=self.settings.classification_max_new_labels,
+            max_new_tags=self.settings.unified_pipeline_max_new_tags,
             content_text=truncated,
         )
 
         # Call LLM
+        t0 = time.monotonic()
         try:
             response = await self.llm.generate(
                 prompt,
@@ -378,27 +485,53 @@ class UnifiedPipelineService:
                 timeout=120.0,
             )
         except Exception as e:
-            logger.error("Unified pipeline LLM call failed for %s: %s", content_id, e)
-            return None
+            raise PipelineStageError(
+                "llm_call",
+                "LLM_CALL_ERROR",
+                str(e)[:500],
+            ) from e
+        llm_ms = int((time.monotonic() - t0) * 1000)
+        token_estimate = len(prompt) // 4 + len(response) // 4
+        logger.info(
+            "stage.llm_call job_id=%s content_id=%s ms=%d token_est=%d",
+            job_id,
+            content_id,
+            llm_ms,
+            token_estimate,
+        )
 
         # Parse response
+        t0 = time.monotonic()
         data = extract_json(response)
         if not data:
-            logger.warning("Empty unified pipeline response for %s", content_id)
-            return None
+            raise PipelineStageError(
+                "parse",
+                "EMPTY_RESPONSE",
+                f"Empty unified pipeline response for {content_id}",
+            )
 
-        # Validate and build result
         result = parse_unified_response(data, existing_tags, self.settings)
         if result is None:
-            logger.warning("Failed to parse unified response for %s", content_id)
-            return None
+            raise PipelineStageError(
+                "parse",
+                "PARSE_FAILED",
+                f"Failed to parse unified response for {content_id}",
+            )
+        parse_ms = int((time.monotonic() - t0) * 1000)
+        logger.info(
+            "stage.parse job_id=%s content_id=%s ms=%d",
+            job_id,
+            content_id,
+            parse_ms,
+        )
 
         # Record model name and timestamp
         result.model = getattr(self.llm, "model", "fallback_chain")
         result.processed_at = datetime.now(UTC).isoformat()
 
         logger.info(
-            "Unified pipeline %s: tier=%s score=%d tags=%s topics=%d",
+            "pipeline.complete job_id=%s content_id=%s tier=%s score=%d tags=%s topics=%d",
+            job_id,
             content_id,
             result.tier,
             result.quality_score,

@@ -25,7 +25,7 @@ api/
 └── menos/
     ├── main.py              # FastAPI app entry point
     ├── config.py            # Pydantic Settings (env-based configuration)
-    ├── models.py            # Pydantic models for content and chunks
+    ├── models.py            # Pydantic models for content, chunks, jobs
     ├── auth/                # RFC 9421 HTTP signature authentication
     │   ├── dependencies.py  # FastAPI auth dependencies
     │   ├── keys.py          # Public key store
@@ -35,8 +35,10 @@ api/
     ├── routers/             # FastAPI route handlers
     │   ├── auth.py          # Auth endpoints
     │   ├── content.py       # Content CRUD, tags, links/backlinks
+    │   ├── entities.py      # Entity management
     │   ├── graph.py         # Knowledge graph visualization
     │   ├── health.py        # Health check (returns git SHA)
+    │   ├── jobs.py          # Pipeline job management
     │   ├── search.py        # Semantic search
     │   └── youtube.py       # YouTube ingestion
     └── services/            # Business logic (no FastAPI dependencies)
@@ -48,10 +50,16 @@ api/
         ├── linking.py       # Wiki-link and markdown link extraction
         ├── llm.py           # LLMProvider protocol, OllamaLLMProvider
         ├── llm_providers.py # OpenAI, Anthropic, OpenRouter providers
+        ├── llm_json.py      # JSON extraction from LLM responses
         ├── reranker.py      # RerankerProvider protocol and implementations
         ├── agent.py         # AgentService (3-stage agentic search)
         ├── migrator.py      # Database migration service
         ├── url_filter.py    # Heuristic URL classification
+        ├── jobs.py          # JobRepository for pipeline job management
+        ├── resource_key.py  # Resource key generation for deduplication
+        ├── callbacks.py     # Callback notification service
+        ├── pipeline_orchestrator.py  # Pipeline job orchestration
+        ├── unified_pipeline.py       # Unified LLM processing
         └── di.py            # Dependency injection helpers
 ```
 
@@ -65,7 +73,11 @@ api/
 
 4. **Storage separation**: MinIO for file content, SurrealDB for metadata and embeddings.
 
-5. **Agentic search pipeline**: 3-stage search with LLM providers:
+5. **Job-first authority model**: Pipeline processing uses dedicated `pipeline_job` records as source of truth. Content processing status mirrors job status. Resource keys enable deduplication across ingestion methods.
+
+6. **Bounded pipeline concurrency**: Global semaphore limits concurrent unified pipeline jobs to prevent resource exhaustion. Configurable via `UNIFIED_PIPELINE_MAX_CONCURRENCY`.
+
+7. **Agentic search pipeline**: 3-stage search with LLM providers:
    - Query expansion: LLM generates multiple search queries
    - Retrieval: Multi-query vector search with RRF (Reciprocal Rank Fusion)
    - Synthesis: LLM generates answer with citations from retrieved results

@@ -57,10 +57,62 @@ def run_migrations() -> None:
         logger.error(f"Migration failed: {e} - app continuing without migration")
 
 
+def _run_purge() -> None:
+    """Purge expired pipeline job records on startup."""
+    settings = get_settings()
+    try:
+        surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace(
+            "wss://", "https://"
+        )
+        db = Surreal(surreal_url)
+        db.signin(
+            {
+                "username": settings.surrealdb_user,
+                "password": settings.surrealdb_password,
+            }
+        )
+        db.use(settings.surrealdb_namespace, settings.surrealdb_database)
+
+        compact_result = db.query(
+            "DELETE FROM pipeline_job WHERE data_tier = 'compact' "
+            "AND finished_at != NONE AND finished_at < time::now() - 6mo "
+            "RETURN BEFORE"
+        )
+        full_result = db.query(
+            "DELETE FROM pipeline_job WHERE data_tier = 'full' "
+            "AND finished_at != NONE AND finished_at < time::now() - 2mo "
+            "RETURN BEFORE"
+        )
+
+        def _parse(result):
+            if not result or not isinstance(result, list) or len(result) == 0:
+                return []
+            first = result[0]
+            if isinstance(first, dict) and "result" in first:
+                return first["result"] or []
+            return result
+
+        compact_count = len(_parse(compact_result))
+        full_count = len(_parse(full_result))
+        total = compact_count + full_count
+        if total > 0:
+            logger.info(
+                "Purged %d expired pipeline jobs (compact=%d, full=%d)",
+                total,
+                compact_count,
+                full_count,
+            )
+        else:
+            logger.info("Pipeline job purge: no expired records")
+    except Exception as e:
+        logger.error("Pipeline job purge failed: %s - app continuing", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     run_migrations()
+    _run_purge()
     yield
     if background_tasks:
         logger.info("Waiting for %d background task(s)...", len(background_tasks))

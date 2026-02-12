@@ -2,7 +2,7 @@
 
 ## Overview
 
-Menos supports two content ingest paths: YouTube video transcripts and general content uploads (markdown, text). Both paths converge into a shared pipeline that stores files in MinIO, persists metadata to SurrealDB, generates vector embeddings, and triggers background classification.
+Menos supports two content ingest paths: YouTube video transcripts and general content uploads (markdown, text). Both paths converge into a shared pipeline that stores files in MinIO, persists metadata to SurrealDB, generates vector embeddings, and submits jobs to the unified pipeline for LLM-based processing.
 
 ## Entry Points
 
@@ -51,14 +51,13 @@ flowchart TD
         STORE_CHUNKS["Store Chunks\n(SurrealDB)"]
     end
 
-    subgraph Classify["Stage 4: Background Classification"]
-        PROFILE["Build Interest Profile\n(top topics, tags, channels)"]
-        LLM["LLM Classification\n(labels, tier, score, summary)"]
-        DEDUP["Deduplicate Labels\n(Levenshtein distance ≤ 2)"]
-        SAVE["Update Content Record\n(tier, score, labels, summary)"]
+    subgraph Pipeline["Stage 4: Unified Pipeline Job"]
+        SUBMIT["Create Pipeline Job\n(resource key dedup)"]
+        PROCESS_JOB["Background Processing\n(LLM call)"]
+        UPDATE["Update Content\n(tags, tier, score, summary)"]
     end
 
-    RESPONSE["Return HTTP Response\n(content ID, chunks created)"]
+    RESPONSE["Return HTTP Response\n(content ID, chunks created, job ID)"]
 
     YI --> VID --> TF
     TF --> MF
@@ -73,16 +72,17 @@ flowchart TD
     LINK -->|"markdown only"| SURREAL
     CHUNK --> EMBED --> STORE_CHUNKS
 
-    STORE_CHUNKS --> RESPONSE
+    STORE_CHUNKS --> SUBMIT
+    SUBMIT --> RESPONSE
 
-    SURREAL -.->|"fire-and-forget\nasync task"| PROFILE
-    PROFILE --> LLM --> DEDUP --> SAVE
+    SUBMIT -.->|"fire-and-forget\nasync task"| PROCESS_JOB
+    PROCESS_JOB --> UPDATE
 
     style Entry fill:#f0f4ff,stroke:#4a9eff
     style Fetch fill:#fff3e6,stroke:#ff9f43
     style Store fill:#e8f5e9,stroke:#4caf50
     style Process fill:#f3e5f5,stroke:#9c27b0
-    style Classify fill:#fff8e1,stroke:#ffc107
+    style Pipeline fill:#fff8e1,stroke:#ffc107
     style RESPONSE fill:#4caf50,color:#fff
 ```
 
@@ -152,7 +152,6 @@ sequenceDiagram
 ```
 youtube/{video_id}/transcript.txt     # Timestamped transcript
 youtube/{video_id}/metadata.json      # Rich metadata (JSON)
-youtube/{video_id}/summary.md         # Classification summary (added later)
 content/{id}/original_filename        # General uploads
 ```
 
@@ -198,46 +197,46 @@ flowchart TD
 - Embedding failures are non-fatal — `embedding` set to `NULL`
 - Only runs when `generate_embeddings=true` in the request
 
-### Stage 4: Background Classification
+### Stage 4: Unified Pipeline Job
 
 ```mermaid
 flowchart TD
-    TRIGGER["Content Created\n(≥ min_content_length)"] --> STATUS["Set classification_status = pending"]
-    STATUS --> PROFILE["Build Interest Profile"]
+    TRIGGER["Content Created"] --> SUBMIT["Create Pipeline Job\n(resource key dedup)"]
+    SUBMIT --> STATUS["Set processing_status = pending"]
+    STATUS --> BG["Fire-and-Forget\nBackground Task"]
 
-    subgraph Profile["Interest Profiling (cached 5 min)"]
-        TOPICS["Top Topics\n(from content_entity edges)"]
-        TAGS["Top Tags\n(recency-weighted)"]
-        CHANNELS["Top YouTube Channels\n(by video count)"]
-    end
+    BG --> SEM["Semaphore Acquire\n(bounded concurrency)"]
+    SEM --> PROCESSING["Update status = processing"]
+    PROCESSING --> TRUNCATE["Truncate Content\n(10k chars)"]
+    TRUNCATE --> TAGS["Fetch Existing Tags"]
+    TAGS --> PROMPT["Build LLM Prompt\n(tags, topics, pre-detected entities)"]
 
-    PROFILE --> TOPICS & TAGS & CHANNELS
-    TOPICS & TAGS & CHANNELS --> PROMPT["Construct LLM Prompt\n(content truncated to 10k chars)"]
+    PROMPT --> LLM["Call LLM Provider\n(unified prompt)"]
+    LLM --> PARSE["Parse JSON Response"]
 
-    PROMPT --> LLM["LLM Call\n(configurable provider)"]
-    LLM -->|"retry: 3x\nbackoff: 1s, 2s, 4s"| PARSE["Parse JSON Response"]
+    PARSE --> VALIDATE["Validate & Dedup\n(tags, tier, score)"]
+    VALIDATE --> SAVE_CONTENT["Update content table\n(tags, tier, score, summary, processed_at)"]
+    VALIDATE --> SAVE_JOB["Update job status = completed"]
 
-    PARSE --> DEDUP["Deduplicate Labels\n(Levenshtein ≤ 2 → existing label)"]
-    DEDUP --> CLAMP["Validate & Clamp\n(score: 1-100, tier: S/A/B/C/D)"]
-    CLAMP --> SAVE["Update Content Record"]
-    CLAMP --> SUMMARY["Save summary.md to MinIO"]
-
-    LLM -->|"all retries failed"| FAIL["Set classification_status = failed"]
+    LLM -->|"error"| FAIL["Set status = failed\nerror_code, error_message, error_stage"]
 
     style TRIGGER fill:#4caf50,color:#fff
     style FAIL fill:#f44336,color:#fff
+    style SAVE_CONTENT fill:#4caf50,color:#fff
+    style SAVE_JOB fill:#4caf50,color:#fff
 ```
 
-**Classification output:**
+**Pipeline job output:**
 | Field | Description |
 |---|---|
-| `labels` | Topic labels (deduplicated against existing) |
+| `tags` | Topic tags (deduplicated against existing) |
 | `tier` | Quality tier: S, A, B, C, or D |
 | `quality_score` | 1–100 numeric score |
-| `tier_explanation` | Why this tier was assigned |
-| `score_explanation` | Why this score was assigned |
+| `tier_explanation` | Why this tier was assigned (bullet list) |
+| `score_explanation` | Why this score was assigned (bullet list) |
 | `summary` | Markdown-formatted content summary |
 | `model` | Which LLM produced the result |
+| `processed_at` | UTC timestamp of processing |
 
 ## Response Timeline
 
@@ -255,15 +254,15 @@ gantt
     Create SurrealDB Record  :sr, 8, 9
     Chunk Text               :ch, 9, 10
     Generate Embeddings      :em, 10, 40
-    HTTP Response Returned   :milestone, 40, 40
+    Create Pipeline Job      :pj, 40, 41
+    HTTP Response Returned   :milestone, 41, 41
 
     section Async Background
-    Build Interest Profile   :ip, 40, 45
-    LLM Classification       :lc, 45, 80
-    Save Classification      :sc, 80, 82
+    LLM Processing           :lp, 41, 80
+    Save Results             :sr2, 80, 82
 ```
 
-The HTTP response returns after embedding generation completes. Classification runs entirely in the background and does not block the response.
+The HTTP response returns after pipeline job submission. All LLM processing runs in the background and does not block the response.
 
 ## Configuration
 
@@ -275,11 +274,11 @@ The HTTP response returns after embedding generation completes. Classification r
 | `SURREALDB_URL/NAMESPACE/DATABASE/USER/PASSWORD` | Persist | SurrealDB connection |
 | `OLLAMA_URL` | Embed | Ollama server URL |
 | `OLLAMA_MODEL` | Embed | Embedding model (mxbai-embed-large) |
-| `CLASSIFICATION_ENABLED` | Classify | Enable/disable background classification |
-| `CLASSIFICATION_MIN_CONTENT_LENGTH` | Classify | Minimum chars to trigger classification |
-| `CLASSIFICATION_MAX_NEW_LABELS` | Classify | Max new labels created per content |
-| `AGENT_SYNTHESIS_PROVIDER` | Classify | LLM provider (ollama/openai/anthropic/openrouter) |
-| `AGENT_SYNTHESIS_MODEL` | Classify | LLM model name |
+| `UNIFIED_PIPELINE_ENABLED` | Pipeline | Enable/disable unified pipeline |
+| `UNIFIED_PIPELINE_MAX_CONCURRENCY` | Pipeline | Max concurrent pipeline jobs |
+| `UNIFIED_PIPELINE_MAX_NEW_TAGS` | Pipeline | Max new tags created per content |
+| `AGENT_SYNTHESIS_PROVIDER` | Pipeline | LLM provider (ollama/openai/anthropic/openrouter) |
+| `AGENT_SYNTHESIS_MODEL` | Pipeline | LLM model name |
 
 ## Error Handling
 
@@ -290,5 +289,6 @@ The HTTP response returns after embedding generation completes. Classification r
 | MinIO upload fails | Fatal | Returns HTTP error |
 | SurrealDB write fails | Fatal | Returns HTTP error |
 | Embedding generation fails | Non-fatal | Chunk stored with `embedding = NULL` |
-| Classification LLM fails | Non-fatal | Status set to `failed`, no classification data |
-| Classification cancelled (shutdown) | Non-fatal | Status set to `failed`, logged as warning |
+| Pipeline job submission fails | Non-fatal | Returns content ID but no job_id |
+| Pipeline LLM call fails | Non-fatal | Job status set to `failed` with error_code/error_stage/error_message |
+| Pipeline cancelled (shutdown) | Non-fatal | Job status set to `cancelled` |

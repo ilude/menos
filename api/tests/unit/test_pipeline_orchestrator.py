@@ -6,6 +6,7 @@ import pytest
 
 from menos.models import JobStatus, PipelineJob
 from menos.services.pipeline_orchestrator import PipelineOrchestrator
+from menos.services.unified_pipeline import PipelineStageError
 
 
 @pytest.fixture(autouse=True)
@@ -159,7 +160,12 @@ class TestRunPipelineFailure:
 
 class TestRunPipelineException:
     @pytest.mark.asyncio
-    async def test_exception_marks_failed(self, orchestrator, mock_pipeline_service, mock_job_repo):
+    async def test_exception_marks_failed_with_unknown_stage(
+        self,
+        orchestrator,
+        mock_pipeline_service,
+        mock_job_repo,
+    ):
         mock_pipeline_service.process.side_effect = RuntimeError("LLM down")
         job = PipelineJob(id="job1", resource_key="yt:abc", content_id="abc")
 
@@ -170,6 +176,33 @@ class TestRunPipelineException:
             JobStatus.FAILED,
             error_code="PIPELINE_EXCEPTION",
             error_message="LLM down",
+            error_stage="unknown",
+        )
+
+
+class TestRunPipelineStageError:
+    @pytest.mark.asyncio
+    async def test_stage_error_populates_error_stage(
+        self,
+        orchestrator,
+        mock_pipeline_service,
+        mock_job_repo,
+    ):
+        mock_pipeline_service.process.side_effect = PipelineStageError(
+            "llm_call",
+            "LLM_TIMEOUT",
+            "timed out",
+        )
+        job = PipelineJob(id="job1", resource_key="yt:abc", content_id="abc")
+
+        await orchestrator._run_pipeline(job, "text", "youtube", "Title")
+
+        mock_job_repo.update_job_status.assert_any_call(
+            "job1",
+            JobStatus.FAILED,
+            error_code="LLM_TIMEOUT",
+            error_message="timed out",
+            error_stage="llm_call",
         )
 
 

@@ -161,38 +161,6 @@ class PreDetectedValidation(BaseModel):
     confirmed: bool
 
 
-class ExtractionResult(BaseModel):
-    """Result of LLM entity extraction."""
-
-    topics: list[ExtractedEntity] = Field(default_factory=list)
-    pre_detected_validations: list[PreDetectedValidation] = Field(default_factory=list)
-    additional_entities: list[ExtractedEntity] = Field(default_factory=list)
-
-
-class ExtractionMetrics(BaseModel):
-    """Metrics for entity extraction pipeline."""
-
-    content_id: str
-    pre_detected_count: int = 0  # Entities found via code
-    llm_extracted_count: int = 0  # Entities found via LLM
-    llm_skipped: bool = False  # Did we skip LLM?
-    llm_tokens_used: int = 0  # Token count if LLM called
-    total_latency_ms: int = 0
-
-
-class ClassificationResult(BaseModel):
-    """Result of content classification (quality tier + labels + summary)."""
-
-    labels: list[str] = Field(default_factory=list)
-    tier: str = ""  # S, A, B, C, D
-    tier_explanation: list[str] = Field(default_factory=list)
-    quality_score: int = 0  # 1-100
-    score_explanation: list[str] = Field(default_factory=list)
-    summary: str = ""
-    model: str = ""
-    classified_at: str = ""
-
-
 class UnifiedResult(BaseModel):
     """Result of unified pipeline (classification + entity extraction in one LLM call)."""
 

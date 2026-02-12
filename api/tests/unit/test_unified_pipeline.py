@@ -1,12 +1,12 @@
 """Tests for unified pipeline orchestration service."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from menos.models import EdgeType, EntityType, UnifiedResult
-from menos.services.unified_pipeline import UnifiedPipelineService
+from menos.services.unified_pipeline import PipelineStageError, UnifiedPipelineService
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def mock_settings():
     """Create mock settings for unified pipeline."""
     s = MagicMock()
     s.unified_pipeline_enabled = True
-    s.classification_max_new_labels = 3
+    s.unified_pipeline_max_new_tags = 3
     s.entity_max_topics_per_content = 7
     s.entity_min_confidence = 0.6
     return s
@@ -23,26 +23,30 @@ def mock_settings():
 @pytest.fixture
 def valid_llm_response():
     """A valid unified JSON response from the LLM."""
-    return json.dumps({
-        "tags": ["programming", "kubernetes"],
-        "new_tags": ["homelab"],
-        "tier": "A",
-        "tier_explanation": ["Rich technical content", "Relevant to interests"],
-        "quality_score": 78,
-        "score_explanation": ["Novel approach", "High density"],
-        "summary": "A deep dive into Kubernetes.\n\n- Topic 1\n- Topic 2",
-        "topics": [
-            {"name": "DevOps > Kubernetes > Helm", "confidence": "high",
-             "edge_type": "discusses"}
-        ],
-        "pre_detected_validations": [
-            {"entity_id": "entity:langchain", "edge_type": "uses", "confirmed": True}
-        ],
-        "additional_entities": [
-            {"type": "tool", "name": "Helm", "confidence": "medium",
-             "edge_type": "uses"}
-        ],
-    })
+    return json.dumps(
+        {
+            "tags": ["programming", "kubernetes"],
+            "new_tags": ["homelab"],
+            "tier": "A",
+            "tier_explanation": ["Rich technical content", "Relevant to interests"],
+            "quality_score": 78,
+            "score_explanation": ["Novel approach", "High density"],
+            "summary": "A deep dive into Kubernetes.\n\n- Topic 1\n- Topic 2",
+            "topics": [
+                {
+                    "name": "DevOps > Kubernetes > Helm",
+                    "confidence": "high",
+                    "edge_type": "discusses",
+                }
+            ],
+            "pre_detected_validations": [
+                {"entity_id": "entity:langchain", "edge_type": "uses", "confirmed": True}
+            ],
+            "additional_entities": [
+                {"type": "tool", "name": "Helm", "confidence": "medium", "edge_type": "uses"}
+            ],
+        }
+    )
 
 
 @pytest.fixture
@@ -88,6 +92,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert result is not None
         assert isinstance(result, UnifiedResult)
@@ -99,6 +104,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert "programming" in result.tags
         assert "kubernetes" in result.tags
@@ -110,6 +116,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert result.tier == "A"
 
@@ -120,6 +127,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert result.quality_score == 78
 
@@ -130,6 +138,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert "Kubernetes" in result.summary
 
@@ -140,6 +149,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert len(result.topics) >= 1
         assert result.topics[0].entity_type == EntityType.TOPIC
@@ -152,6 +162,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert len(result.pre_detected_validations) == 1
         assert result.pre_detected_validations[0].entity_id == "entity:langchain"
@@ -164,6 +175,7 @@ class TestHappyPath:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test Video",
+            job_id="test-job",
         )
         assert len(result.additional_entities) == 1
         assert result.additional_entities[0].name == "Helm"
@@ -181,36 +193,41 @@ class TestDisabledSkip:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         assert result is None
 
 
 class TestLLMFailure:
-    """Test LLM failure handling."""
+    """Test LLM failure handling raises PipelineStageError."""
 
     @pytest.mark.asyncio
-    async def test_llm_error_returns_none(self, pipeline_service, mock_llm_provider):
-        mock_llm_provider.generate = AsyncMock(
-            side_effect=RuntimeError("LLM connection failed")
-        )
-        result = await pipeline_service.process(
-            content_id="test-1",
-            content_text="x" * 1000,
-            content_type="youtube",
-            title="Test",
-        )
-        assert result is None
+    async def test_llm_error_raises_stage_error(self, pipeline_service, mock_llm_provider):
+        mock_llm_provider.generate = AsyncMock(side_effect=RuntimeError("LLM connection failed"))
+        with pytest.raises(PipelineStageError) as exc_info:
+            await pipeline_service.process(
+                content_id="test-1",
+                content_text="x" * 1000,
+                content_type="youtube",
+                title="Test",
+                job_id="test-job",
+            )
+        assert exc_info.value.stage == "llm_call"
+        assert exc_info.value.code == "LLM_CALL_ERROR"
 
     @pytest.mark.asyncio
-    async def test_invalid_json_returns_none(self, pipeline_service, mock_llm_provider):
+    async def test_invalid_json_raises_stage_error(self, pipeline_service, mock_llm_provider):
         mock_llm_provider.generate = AsyncMock(return_value="not json at all }{")
-        result = await pipeline_service.process(
-            content_id="test-1",
-            content_text="x" * 1000,
-            content_type="youtube",
-            title="Test",
-        )
-        assert result is None
+        with pytest.raises(PipelineStageError) as exc_info:
+            await pipeline_service.process(
+                content_id="test-1",
+                content_text="x" * 1000,
+                content_type="youtube",
+                title="Test",
+                job_id="test-job",
+            )
+        assert exc_info.value.stage == "parse"
+        assert exc_info.value.code == "EMPTY_RESPONSE"
 
 
 class TestContentTruncation:
@@ -224,6 +241,7 @@ class TestContentTruncation:
             content_text=long_text,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
@@ -239,6 +257,7 @@ class TestContentTruncation:
             content_text=short_text,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
@@ -251,24 +270,27 @@ class TestTagDedup:
     @pytest.mark.asyncio
     async def test_near_duplicate_new_tag_mapped(self, pipeline_service, mock_llm_provider):
         mock_llm_provider.generate = AsyncMock(
-            return_value=json.dumps({
-                "tags": ["programming"],
-                "new_tags": ["programing"],  # One letter off
-                "tier": "B",
-                "tier_explanation": [],
-                "quality_score": 50,
-                "score_explanation": [],
-                "summary": "",
-                "topics": [],
-                "pre_detected_validations": [],
-                "additional_entities": [],
-            })
+            return_value=json.dumps(
+                {
+                    "tags": ["programming"],
+                    "new_tags": ["programing"],  # One letter off
+                    "tier": "B",
+                    "tier_explanation": [],
+                    "quality_score": 50,
+                    "score_explanation": [],
+                    "summary": "",
+                    "topics": [],
+                    "pre_detected_validations": [],
+                    "additional_entities": [],
+                }
+            )
         )
         result = await pipeline_service.process(
             content_id="test-1",
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         assert result is not None
         assert "programming" in result.tags
@@ -285,6 +307,7 @@ class TestPromptContent:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
@@ -306,6 +329,7 @@ class TestPromptContent:
             content_type="youtube",
             title="Test",
             pre_detected=pre_detected,
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
@@ -319,6 +343,7 @@ class TestPromptContent:
             content_type="youtube",
             title="Test",
             existing_topics=["AI > LLMs", "DevOps"],
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
@@ -332,6 +357,7 @@ class TestPromptContent:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
@@ -344,11 +370,49 @@ class TestPromptContent:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         call_args = mock_llm_provider.generate.call_args
         prompt = call_args.args[0]
         assert "<CONTENT>" in prompt
         assert "</CONTENT>" in prompt
+
+
+class TestShortContentProcessing:
+    """Verify unified pipeline has no min-length gate."""
+
+    @pytest.mark.asyncio
+    async def test_short_content_not_skipped(self):
+        """Content < 500 chars is processed (no min-length gate)."""
+        settings = MagicMock()
+        settings.unified_pipeline_enabled = True
+        settings.unified_pipeline_max_new_tags = 3
+        settings.entity_max_topics_per_content = 7
+        settings.entity_min_confidence = 0.6
+
+        llm = MagicMock()
+        llm.generate = AsyncMock(
+            return_value='{"tier": "B", "quality_score": 50, "tags": ["test"], "summary": "Short."}'
+        )
+        llm.model = "test-model"
+
+        repo = MagicMock()
+        repo.list_tags_with_counts = AsyncMock(return_value=[])
+
+        service = UnifiedPipelineService(
+            llm_provider=llm,
+            repo=repo,
+            settings=settings,
+        )
+        result = await service.process(
+            content_id="short-1",
+            content_text="Hello world!",  # 12 chars, well under 500
+            content_type="markdown",
+            title="Short",
+            job_id="test-job",
+        )
+        assert result is not None
+        llm.generate.assert_called_once()
 
 
 class TestModelAndTimestamp:
@@ -361,6 +425,7 @@ class TestModelAndTimestamp:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         assert result is not None
         assert result.model == "test-model"
@@ -372,6 +437,7 @@ class TestModelAndTimestamp:
             content_text="x" * 1000,
             content_type="youtube",
             title="Test",
+            job_id="test-job",
         )
         assert result is not None
         assert result.processed_at != ""

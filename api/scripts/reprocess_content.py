@@ -7,12 +7,12 @@ This script reprocesses existing content to:
 - Populate the link table
 - Extract tags from YouTube video metadata.json
 - Update content tags in database
-- Extract entities (topics, repos, papers, tools) from content
+- Run unified pipeline processing (entity extraction, classification, etc.)
 
 Run with: uv run python scripts/reprocess_content.py
 Use --dry-run to preview changes without applying them.
-Use --entities-only to only run entity extraction (skip tags/links).
-Use --skip-entities to skip entity extraction (only run tags/links).
+Use --entities-only to only run unified pipeline processing (skip tags/links).
+Use --skip-entities to skip unified pipeline processing (only run tags/links).
 """
 
 import argparse
@@ -45,18 +45,18 @@ class ContentReprocessor:
         self,
         surreal_repo: SurrealDBRepository,
         minio_storage: MinIOStorage,
-        entity_resolution_service=None,
+        pipeline_orchestrator=None,
     ):
         """Initialize reprocessor with storage services.
 
         Args:
             surreal_repo: SurrealDB repository for metadata operations
             minio_storage: MinIO storage for file operations
-            entity_resolution_service: Optional entity resolution service
+            pipeline_orchestrator: Optional pipeline orchestrator
         """
         self.surreal_repo = surreal_repo
         self.minio_storage = minio_storage
-        self.entity_resolution = entity_resolution_service
+        self.orchestrator = pipeline_orchestrator
         self.frontmatter_parser = FrontmatterParser()
         self.link_extractor = LinkExtractor()
 
@@ -68,8 +68,7 @@ class ContentReprocessor:
             "errors": 0,
             "tags_updated": 0,
             "links_created": 0,
-            "entities_created": 0,
-            "entity_edges_created": 0,
+            "pipeline_jobs_submitted": 0,
         }
 
     async def reprocess_all_content(
@@ -94,10 +93,7 @@ class ContentReprocessor:
         if skip_entities:
             logger.info("SKIP ENTITIES MODE - Skipping entity extraction")
 
-        # Refresh entity matcher cache if doing entity extraction
-        if self.entity_resolution and not skip_entities and not dry_run:
-            logger.info("Refreshing entity matcher cache...")
-            await self.entity_resolution.refresh_matcher_cache()
+        # No cache refresh needed for unified pipeline
 
         # Fetch all content in batches
         offset = 0
@@ -152,8 +148,7 @@ class ContentReprocessor:
             logger.info(f"Tags updated: {self.stats['tags_updated']}")
             logger.info(f"Links created: {self.stats['links_created']}")
         if not skip_entities:
-            logger.info(f"Entities created: {self.stats['entities_created']}")
-            logger.info(f"Entity edges created: {self.stats['entity_edges_created']}")
+            logger.info(f"Pipeline jobs submitted: {self.stats['pipeline_jobs_submitted']}")
         logger.info("=" * 80)
 
     async def _reprocess_item(
@@ -176,11 +171,11 @@ class ContentReprocessor:
 
         logger.info(f"Processing {content_type}: {content_id} - {item.title}")
 
-        # Check if entity extraction already done (skip if --entities-only and completed)
+        # Check if pipeline already done (skip if --entities-only and completed)
         if entities_only:
-            extraction_status = getattr(item, "processing_status", None)
-            if extraction_status == "completed":
-                logger.info("  Entity extraction already completed, skipping")
+            processing_status = getattr(item, "processing_status", None)
+            if processing_status == "completed":
+                logger.info("  Pipeline processing already completed, skipping")
                 self.stats["skipped"] += 1
                 return
 
@@ -195,65 +190,55 @@ class ContentReprocessor:
             else:
                 logger.info(f"  Skipping non-markdown content: {item.mime_type}")
 
-        # Entity extraction
-        if not skip_entities and self.entity_resolution:
-            await self._reprocess_entities(item, dry_run)
+        # Unified pipeline processing
+        if not skip_entities and self.orchestrator:
+            await self._reprocess_pipeline(item, dry_run)
 
-    async def _reprocess_entities(self, item, dry_run: bool) -> None:
-        """Extract and store entities for a content item.
+    async def _reprocess_pipeline(self, item, dry_run: bool) -> None:
+        """Submit content to unified pipeline for processing.
 
         Args:
             item: ContentMetadata object
             dry_run: If True, preview changes without applying them
         """
+        from menos.services.resource_key import generate_resource_key
+
         content_id = item.id
         content_type = item.content_type
 
         # Get content text
         content_text = await self._get_content_text(item)
         if not content_text:
-            logger.info("  No content text available for entity extraction")
+            logger.info("  No content text available for pipeline processing")
             return
 
-        # Get description URLs for YouTube content
-        description_urls = []
-        if content_type == "youtube":
-            description_urls = await self._get_youtube_description_urls(item)
-
-        logger.info(f"  Extracting entities from {len(content_text)} chars...")
+        logger.info(f"  Submitting to pipeline ({len(content_text)} chars)...")
 
         if dry_run:
-            logger.info("  [DRY RUN] Would extract entities from content")
+            logger.info("  [DRY RUN] Would submit content to unified pipeline")
             return
 
         try:
-            # Mark as processing
-            await self.surreal_repo.update_content_processing_status(content_id, "processing")
+            # Generate resource key
+            resource_key = generate_resource_key(content_type, content_id)
 
-            # Run entity resolution pipeline
-            result = await self.entity_resolution.process_content(
+            # Submit to pipeline orchestrator
+            job = await self.orchestrator.submit(
                 content_id=content_id,
                 content_text=content_text,
                 content_type=content_type,
                 title=item.title or "Untitled",
-                description_urls=description_urls,
+                resource_key=resource_key,
             )
 
-            self.stats["entities_created"] += result.entities_created
-            self.stats["entity_edges_created"] += len(result.edges)
-
-            logger.info(f"  Created {result.entities_created} entities, {len(result.edges)} edges")
-
-            if result.metrics:
-                logger.info(
-                    f"  Metrics: pre_detected={result.metrics.pre_detected_count}, "
-                    f"llm_extracted={result.metrics.llm_extracted_count}, "
-                    f"llm_skipped={result.metrics.llm_skipped}"
-                )
+            if job:
+                self.stats["pipeline_jobs_submitted"] += 1
+                logger.info(f"  Submitted pipeline job {job.id}")
+            else:
+                logger.info("  Pipeline submission skipped (disabled or duplicate)")
 
         except Exception as e:
-            logger.error(f"  Entity extraction failed: {e}")
-            await self.surreal_repo.update_content_processing_status(content_id, "failed")
+            logger.error(f"  Pipeline submission failed: {e}")
             raise
 
     async def _get_content_text(self, item) -> str | None:
@@ -291,34 +276,6 @@ class ContentReprocessor:
                 return None
 
         return None
-
-    async def _get_youtube_description_urls(self, item) -> list[str]:
-        """Extract URLs from YouTube video description.
-
-        Args:
-            item: ContentMetadata for YouTube video
-
-        Returns:
-            List of URLs from description
-        """
-        video_id = item.metadata.get("video_id") if item.metadata else None
-        if not video_id:
-            return []
-
-        metadata_path = f"youtube/{video_id}/metadata.json"
-        try:
-            metadata_bytes = await self.minio_storage.download(metadata_path)
-            metadata_dict = json.loads(metadata_bytes.decode("utf-8"))
-            description = metadata_dict.get("description", "")
-
-            # Simple URL extraction
-            import re
-
-            url_pattern = r'https?://[^\s<>"\'\\]+'
-            urls = re.findall(url_pattern, description)
-            return urls
-        except Exception:
-            return []
 
     async def _reprocess_youtube(self, item, dry_run: bool) -> None:
         """Reprocess YouTube video to extract tags from metadata.json.
@@ -470,95 +427,53 @@ class ContentReprocessor:
             raise
 
 
-def _create_entity_resolution_service(surreal_repo: SurrealDBRepository):
-    """Create entity resolution service with all dependencies.
+def _create_pipeline_orchestrator(surreal_repo: SurrealDBRepository):
+    """Create pipeline orchestrator with all dependencies.
 
     Args:
         surreal_repo: SurrealDB repository
 
     Returns:
-        EntityResolutionService or None if dependencies unavailable
+        PipelineOrchestrator or None if pipeline disabled
     """
-    if not settings.entity_extraction_enabled:
-        logger.info("Entity extraction disabled in settings")
+    if not settings.unified_pipeline_enabled:
+        logger.info("Unified pipeline disabled in settings")
         return None
 
     try:
-        from menos.services.di import build_openrouter_chain
-        from menos.services.entity_extraction import EntityExtractionService
-        from menos.services.entity_resolution import EntityResolutionService
-        from menos.services.keyword_matcher import EntityKeywordMatcher
-        from menos.services.llm import OllamaLLMProvider
+        from menos.services.callbacks import CallbackService
+        from menos.services.di import get_unified_pipeline_provider
+        from menos.services.jobs import JobRepository
+        from menos.services.pipeline_orchestrator import PipelineOrchestrator
+        from menos.services.unified_pipeline import UnifiedPipelineService
 
-        # Create LLM provider based on config
-        if settings.entity_extraction_provider == "openrouter":
-            llm_provider = build_openrouter_chain(settings.entity_extraction_model)
-        else:
-            llm_provider = OllamaLLMProvider(
-                base_url=settings.ollama_url,
-                model=settings.entity_extraction_model,
-            )
+        # Create provider
+        provider = get_unified_pipeline_provider()
 
-        # Create extraction service
-        extraction_service = EntityExtractionService(
-            llm_provider=llm_provider,
+        # Create unified pipeline service
+        pipeline_service = UnifiedPipelineService(
+            llm_provider=provider,
+            repo=surreal_repo,
             settings=settings,
         )
 
-        # Create keyword matcher
-        keyword_matcher = EntityKeywordMatcher()
+        # Create job repository
+        job_repo = JobRepository(surreal_repo.db)
 
-        # Try to import optional fetchers
-        url_detector = None
-        sponsored_filter = None
-        github_fetcher = None
-        arxiv_fetcher = None
+        # Create callback service
+        callback_service = CallbackService(settings)
 
-        try:
-            from menos.services.url_detector import URLDetector
-
-            url_detector = URLDetector()
-        except ImportError:
-            logger.warning("URL detector not available")
-
-        try:
-            from menos.services.sponsored_filter import SponsoredFilter
-
-            sponsored_filter = SponsoredFilter()
-        except ImportError:
-            logger.warning("Sponsored filter not available")
-
-        try:
-            from menos.services.entity_fetchers.github import GitHubFetcher
-
-            github_fetcher = GitHubFetcher(
-                proxy_username=settings.webshare_proxy_username,
-                proxy_password=settings.webshare_proxy_password,
-            )
-        except ImportError:
-            logger.warning("GitHub fetcher not available")
-
-        try:
-            from menos.services.entity_fetchers.arxiv import ArxivFetcher
-
-            arxiv_fetcher = ArxivFetcher()
-        except ImportError:
-            logger.warning("ArXiv fetcher not available")
-
-        # Create resolution service
-        return EntityResolutionService(
-            repository=surreal_repo,
-            extraction_service=extraction_service,
-            keyword_matcher=keyword_matcher,
-            settings=settings,
-            url_detector=url_detector,
-            sponsored_filter=sponsored_filter,
-            github_fetcher=github_fetcher,
-            arxiv_fetcher=arxiv_fetcher,
+        # Create orchestrator
+        return PipelineOrchestrator(
+            pipeline_service,
+            job_repo,
+            surreal_repo,
+            settings,
+            callback_service,
         )
 
-    except ImportError as e:
-        logger.warning(f"Entity extraction services not available: {e}")
+    except Exception as e:
+        logger.warning(f"Pipeline orchestrator creation failed: {e}")
         return None
 
 
@@ -575,12 +490,12 @@ async def main():
     parser.add_argument(
         "--entities-only",
         action="store_true",
-        help="Only run entity extraction (skip tags/links processing)",
+        help="Only run unified pipeline processing (skip tags/links)",
     )
     parser.add_argument(
         "--skip-entities",
         action="store_true",
-        help="Skip entity extraction (only run tags/links processing)",
+        help="Skip unified pipeline processing (only run tags/links)",
     )
     args = parser.parse_args()
 
@@ -617,19 +532,19 @@ async def main():
         logger.error("Please ensure SurrealDB is running and accessible")
         return
 
-    # Create entity resolution service (if not skipping entities)
-    entity_resolution = None
+    # Create pipeline orchestrator (if not skipping entities)
+    orchestrator = None
     if not args.skip_entities:
-        entity_resolution = _create_entity_resolution_service(surreal_repo)
-        if args.entities_only and not entity_resolution:
-            logger.error("Entity extraction requested but service not available")
+        orchestrator = _create_pipeline_orchestrator(surreal_repo)
+        if args.entities_only and not orchestrator:
+            logger.error("Pipeline processing requested but orchestrator not available")
             return
 
     # Run reprocessing
     reprocessor = ContentReprocessor(
         surreal_repo,
         minio_storage,
-        entity_resolution_service=entity_resolution,
+        pipeline_orchestrator=orchestrator,
     )
     await reprocessor.reprocess_all_content(
         dry_run=args.dry_run,

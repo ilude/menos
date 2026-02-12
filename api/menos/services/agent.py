@@ -22,7 +22,7 @@ Original question: {query}
 Return only JSON, no other text."""
 
 
-SYNTHESIS_PROMPT = '''Based on the following search results, answer the user's question.
+SYNTHESIS_PROMPT = """Based on the following search results, answer the user's question.
 Include citations using [1], [2] etc. for each source used.
 If the results don't contain relevant information, say so.
 
@@ -31,7 +31,7 @@ Question: {query}
 Search Results:
 {results}
 
-Provide a comprehensive answer with citations.'''
+Provide a comprehensive answer with citations."""
 
 
 @dataclass
@@ -106,9 +106,7 @@ class AgentService:
 
         # Stage 2: Multi-Query Search with RRF
         retrieval_start = time.perf_counter()
-        search_results = await self._search_with_rrf(
-            expanded_queries, content_type, limit * 2
-        )
+        search_results = await self._search_with_rrf(expanded_queries, content_type, limit * 2)
         timing["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000
 
         # Stage 3a: Reranking
@@ -232,8 +230,7 @@ class AgentService:
             score = float(chunk.get("score", 0.0))
             text = chunk.get("text", "")
             if content_id and (
-                content_id not in best_per_content
-                or score > best_per_content[content_id][0]
+                content_id not in best_per_content or score > best_per_content[content_id][0]
             ):
                 best_per_content[content_id] = (score, text, content_id)
 
@@ -265,13 +262,15 @@ class AgentService:
         results = []
         for content_id, (score, text, cid) in best_per_content.items():
             meta = id_to_meta.get(content_id, {})
-            results.append({
-                "id": content_id,
-                "content_type": meta.get("content_type", "unknown"),
-                "title": meta.get("title"),
-                "score": round(score, 4),
-                "snippet": text[:500] if text else None,
-            })
+            results.append(
+                {
+                    "id": content_id,
+                    "content_type": meta.get("content_type", "unknown"),
+                    "title": meta.get("title"),
+                    "score": round(score, 4),
+                    "snippet": text[:500] if text else None,
+                }
+            )
 
         # Sort by score descending
         results.sort(key=lambda x: x["score"], reverse=True)

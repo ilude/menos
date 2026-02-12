@@ -61,17 +61,13 @@ class SponsoredFilter:
 
         # Special case: Check if this is an AWS-related URL
         is_aws_url = any(
-            aws_domain in url_lower
-            for aws_domain in ["aws.amazon.com", "docs.aws.amazon.com"]
+            aws_domain in url_lower for aws_domain in ["aws.amazon.com", "docs.aws.amazon.com"]
         )
 
         # If it's an AWS URL and we have AWS context, it's not sponsored
         if is_aws_url and context:
             context_lower = context.lower()
-            if any(
-                keyword in context_lower
-                for keyword in ["aws", "s3", "ec2", "lambda", "cloud"]
-            ):
+            if any(keyword in context_lower for keyword in ["aws", "s3", "ec2", "lambda", "cloud"]):
                 return False
 
         # Check patterns

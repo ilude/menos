@@ -19,20 +19,13 @@ class LinkExtractor:
     """Extracts and resolves links from markdown content."""
 
     # Wiki-link patterns: [[Title]] or [[Title|display text]]
-    WIKI_LINK_PATTERN = re.compile(
-        r"\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]"
-    )
+    WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]")
 
     # Markdown link pattern: [text](url)
-    MARKDOWN_LINK_PATTERN = re.compile(
-        r"\[([^\]]+?)\]\(([^)]+?)\)"
-    )
+    MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+?)\]\(([^)]+?)\)")
 
     # Code block pattern to exclude links within code blocks
-    CODE_BLOCK_PATTERN = re.compile(
-        r"```[\s\S]*?```|`[^`]+?`",
-        re.MULTILINE
-    )
+    CODE_BLOCK_PATTERN = re.compile(r"```[\s\S]*?```|`[^`]+?`", re.MULTILINE)
 
     def extract_links(self, content: str) -> list[ExtractedLink]:
         """
@@ -48,8 +41,7 @@ class LinkExtractor:
 
         # Find code blocks to exclude them from link extraction
         code_blocks = [
-            (match.start(), match.end())
-            for match in self.CODE_BLOCK_PATTERN.finditer(content)
+            (match.start(), match.end()) for match in self.CODE_BLOCK_PATTERN.finditer(content)
         ]
 
         # Extract wiki-links
@@ -60,13 +52,15 @@ class LinkExtractor:
             target = match.group(1).strip()
             display_text = match.group(2).strip() if match.group(2) else target
 
-            links.append(ExtractedLink(
-                link_text=display_text,
-                target=target,
-                link_type="wiki",
-                start_pos=match.start(),
-                end_pos=match.end()
-            ))
+            links.append(
+                ExtractedLink(
+                    link_text=display_text,
+                    target=target,
+                    link_type="wiki",
+                    start_pos=match.start(),
+                    end_pos=match.end(),
+                )
+            )
 
         # Extract markdown links (skip external URLs)
         for match in self.MARKDOWN_LINK_PATTERN.finditer(content):
@@ -77,16 +71,18 @@ class LinkExtractor:
             url = match.group(2).strip()
 
             # Skip external URLs
-            if url.startswith(('http://', 'https://', '//')):
+            if url.startswith(("http://", "https://", "//")):
                 continue
 
-            links.append(ExtractedLink(
-                link_text=link_text,
-                target=url,
-                link_type="markdown",
-                start_pos=match.start(),
-                end_pos=match.end()
-            ))
+            links.append(
+                ExtractedLink(
+                    link_text=link_text,
+                    target=url,
+                    link_type="markdown",
+                    start_pos=match.start(),
+                    end_pos=match.end(),
+                )
+            )
 
         # Sort by position
         links.sort(key=lambda x: x.start_pos)
@@ -119,10 +115,6 @@ class LinkExtractor:
         """
         return None
 
-    def _is_in_code_block(
-        self,
-        position: int,
-        code_blocks: list[tuple[int, int]]
-    ) -> bool:
+    def _is_in_code_block(self, position: int, code_blocks: list[tuple[int, int]]) -> bool:
         """Check if a position falls within any code block."""
         return any(start <= position < end for start, end in code_blocks)

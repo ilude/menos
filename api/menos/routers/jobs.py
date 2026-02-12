@@ -93,6 +93,13 @@ async def reprocess_content(
     if not content:
         raise HTTPException(status_code=404, detail="Content not found")
 
+    logger.info(
+        "audit.reprocess_trigger content_id=%s force=%s key_id=%s",
+        content_id,
+        force,
+        key_id,
+    )
+
     # Check processing status unless force
     if not force:
         raw = surreal_repo.db.query(
@@ -152,6 +159,11 @@ async def get_job_status(
         raise HTTPException(status_code=404, detail="Job not found")
 
     if verbose:
+        logger.info(
+            "audit.full_tier_access job_id=%s key_id=%s",
+            job_id,
+            key_id,
+        )
         return JobDetailResponse(
             job_id=job.id or job_id,
             content_id=job.content_id,
@@ -237,6 +249,12 @@ async def cancel_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+        logger.info(
+            "audit.cancellation job_id=%s outcome=already_%s key_id=%s",
+            job.id or job_id,
+            job.status.value,
+            key_id,
+        )
         return CancelResponse(
             job_id=job.id or job_id,
             status=job.status.value,
@@ -244,6 +262,12 @@ async def cancel_job(
         )
 
     await job_repo.update_job_status(job.id or job_id, JobStatus.CANCELLED)
+
+    logger.info(
+        "audit.cancellation job_id=%s outcome=cancelled key_id=%s",
+        job.id or job_id,
+        key_id,
+    )
 
     return CancelResponse(
         job_id=job.id or job_id,

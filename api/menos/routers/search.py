@@ -100,8 +100,7 @@ async def vector_search(
 
     # Build WHERE clause with tag filtering
     where_clause = (
-        "WHERE embedding != NONE"
-        " AND vector::similarity::cosine(embedding, $embedding) > 0.3"
+        "WHERE embedding != NONE AND vector::similarity::cosine(embedding, $embedding) > 0.3"
     )
     params = {"embedding": query_embedding, "limit": body.limit}
 
@@ -138,8 +137,7 @@ async def vector_search(
         score = float(chunk.get("score", 0.0))
         text = chunk.get("text", "")
         if content_id and (
-            content_id not in best_per_content
-            or score > best_per_content[content_id][0]
+            content_id not in best_per_content or score > best_per_content[content_id][0]
         ):
             best_per_content[content_id] = (score, text)
 
@@ -152,9 +150,7 @@ async def vector_search(
             body.entity_types,
             body.topics,
         )
-        best_per_content = {
-            k: v for k, v in best_per_content.items() if k in filtered_content
-        }
+        best_per_content = {k: v for k, v in best_per_content.items() if k in filtered_content}
 
     # Get content metadata only for matched IDs
     id_to_meta: dict[str, dict] = {}
@@ -164,8 +160,7 @@ async def vector_search(
     if content_ids:
         content_refs = [f"content:{cid}" for cid in content_ids]
         content_results = surreal_repo.db.query(
-            "SELECT * FROM content WHERE id IN $ids",
-            {"ids": content_refs}
+            "SELECT * FROM content WHERE id IN $ids", {"ids": content_refs}
         )
 
         if content_results and isinstance(content_results, list) and len(content_results) > 0:

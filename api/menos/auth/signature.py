@@ -55,9 +55,7 @@ class SignatureVerifier:
 
         # Build signature base
         covered_components = params.get("components", [])
-        signature_base = await self._build_signature_base(
-            request, covered_components, sig_input
-        )
+        signature_base = await self._build_signature_base(request, covered_components, sig_input)
 
         # Extract and verify signature
         sig_bytes = self._extract_signature(signature)
@@ -75,7 +73,7 @@ class SignatureVerifier:
         result = {"components": []}
 
         # Extract label and value
-        match = re.match(r'^(\w+)=\(([^)]*)\);?(.*)$', sig_input)
+        match = re.match(r"^(\w+)=\(([^)]*)\);?(.*)$", sig_input)
         if not match:
             raise HTTPException(400, "Invalid signature-input format")
 
@@ -131,7 +129,7 @@ class SignatureVerifier:
     def _extract_signature(self, signature_header: str) -> bytes:
         """Extract signature bytes from header."""
         # Format: sig1=:base64data:
-        match = re.match(r'^\w+=:([A-Za-z0-9+/=]+):', signature_header)
+        match = re.match(r"^\w+=:([A-Za-z0-9+/=]+):", signature_header)
         if not match:
             raise HTTPException(400, "Invalid signature format")
         return b64decode(match.group(1))

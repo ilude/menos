@@ -33,9 +33,9 @@ def create_frontmatter(
     video_id: str,
     channel: str | None,
     summary_model: str | None,
-    classification_tier: str | None,
-    classification_score: int | None,
-    classification_labels: list[str] | None,
+    tier: str | None,
+    quality_score: int | None,
+    tags: list[str] | None,
 ) -> str:
     """Create YAML frontmatter for markdown file."""
     exported_at = datetime.now(UTC).isoformat()
@@ -51,14 +51,14 @@ def create_frontmatter(
     if summary_model:
         frontmatter_dict["summary_model"] = summary_model
 
-    if classification_tier:
-        frontmatter_dict["classification_tier"] = classification_tier
+    if tier:
+        frontmatter_dict["tier"] = tier
 
-    if classification_score is not None:
-        frontmatter_dict["classification_score"] = classification_score
+    if quality_score is not None:
+        frontmatter_dict["quality_score"] = quality_score
 
-    if classification_labels:
-        frontmatter_dict["classification_labels"] = classification_labels
+    if tags:
+        frontmatter_dict["tags"] = tags
 
     frontmatter_dict["exported_at"] = exported_at
 
@@ -144,35 +144,28 @@ async def export_summaries(
                 logger.warning(f"  No summary found: {e}")
                 summary_text = "(No summary available)"
 
-            # Get classification data from raw SurrealDB record
-            classification_tier = None
-            classification_score = None
-            classification_labels = None
+            # Get unified pipeline data from raw SurrealDB record
+            tier = None
+            quality_score = None
+            tags = None
 
             try:
                 raw = surreal.db.query(
-                    "SELECT processing_status, metadata.unified_result AS unified_result, "
-                    "classification_status, classification_tier, "
-                    "classification_score, metadata.classification.labels AS labels "
+                    "SELECT processing_status, "
+                    "metadata.unified_result AS unified_result "
                     "FROM content WHERE id = $id",
                     {"id": item.id},
                 )
                 parsed = surreal._parse_query_result(raw)
                 if parsed:
                     rec = parsed[0]
-                    # Try unified result first (new pipeline)
                     unified = rec.get("unified_result")
                     if rec.get("processing_status") == "completed" and unified:
-                        classification_tier = unified.get("tier")
-                        classification_score = unified.get("quality_score")
-                        classification_labels = unified.get("tags")
-                    # Fall back to legacy classification
-                    elif rec.get("classification_status") == "completed":
-                        classification_tier = rec.get("classification_tier")
-                        classification_score = rec.get("classification_score")
-                        classification_labels = rec.get("labels")
+                        tier = unified.get("tier")
+                        quality_score = unified.get("quality_score")
+                        tags = unified.get("tags")
             except Exception as e:
-                logger.warning(f"  Could not fetch classification: {e}")
+                logger.warning(f"  Could not fetch pipeline result: {e}")
 
             # Create frontmatter
             frontmatter = create_frontmatter(
@@ -180,9 +173,9 @@ async def export_summaries(
                 video_id=video_id,
                 channel=channel,
                 summary_model=summary_model,
-                classification_tier=classification_tier,
-                classification_score=classification_score,
-                classification_labels=classification_labels,
+                tier=tier,
+                quality_score=quality_score,
+                tags=tags,
             )
 
             # Generate filename from title

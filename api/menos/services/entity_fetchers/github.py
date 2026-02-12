@@ -84,9 +84,7 @@ class GitHubFetcher:
                 fetched_at=datetime.now(UTC),
             )
 
-    async def _fetch_with_retry(
-        self, client: httpx.AsyncClient, url: str
-    ) -> httpx.Response | None:
+    async def _fetch_with_retry(self, client: httpx.AsyncClient, url: str) -> httpx.Response | None:
         """Fetch URL with exponential backoff retry logic.
 
         Args:

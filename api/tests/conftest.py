@@ -22,7 +22,6 @@ from menos.services.di import (
     get_surreal_repo,
 )
 from menos.services.embeddings import EmbeddingService, get_embedding_service
-from menos.services.entity_resolution import ResolutionResult
 from menos.services.youtube import get_youtube_service
 from menos.services.youtube_metadata import get_youtube_metadata_service
 
@@ -91,8 +90,6 @@ def mock_surreal_repo():
     repo.vector_search = AsyncMock(return_value=[])
     repo.get_graph_data = AsyncMock(return_value=([], []))
     repo.get_neighborhood = AsyncMock(return_value=([], []))
-    repo.update_content_classification_status = AsyncMock()
-    repo.update_content_classification = AsyncMock()
     repo.update_content_extraction_status = AsyncMock()
     return repo
 
@@ -132,26 +129,6 @@ def mock_metadata_service():
     """Mock YouTube metadata service."""
     service = MagicMock()
     service.fetch_metadata = MagicMock()
-    return service
-
-
-@pytest.fixture
-def mock_classification_service():
-    """Mock classification service."""
-    service = MagicMock()
-    service.classify_content = AsyncMock(return_value=None)
-    service.settings = MagicMock()
-    service.settings.classification_min_content_length = 500
-    return service
-
-
-@pytest.fixture
-def mock_entity_resolution_service():
-    """Mock entity resolution service."""
-    service = MagicMock()
-    service.process_content = AsyncMock(
-        return_value=ResolutionResult(edges=[], entities_created=0, entities_reused=0, metrics=None)
-    )
     return service
 
 

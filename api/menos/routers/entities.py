@@ -277,6 +277,7 @@ async def update_entity(
     updates = {}
     if update_request.name is not None:
         from menos.services.normalization import normalize_name
+
         updates["name"] = update_request.name
         updates["normalized_name"] = normalize_name(update_request.name)
 

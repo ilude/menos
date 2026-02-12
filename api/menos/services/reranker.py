@@ -252,8 +252,7 @@ class LLMRerankerProvider:
 
         # Fallback: return original order
         return [
-            RankedDocument(text=doc, original_index=i, score=1.0)
-            for i, doc in enumerate(documents)
+            RankedDocument(text=doc, original_index=i, score=1.0) for i, doc in enumerate(documents)
         ]
 
     async def close(self) -> None:
@@ -278,8 +277,7 @@ class NoOpRerankerProvider:
             List of documents in original order, all with score=1.0
         """
         return [
-            RankedDocument(text=doc, original_index=i, score=1.0)
-            for i, doc in enumerate(documents)
+            RankedDocument(text=doc, original_index=i, score=1.0) for i, doc in enumerate(documents)
         ]
 
     async def close(self) -> None:

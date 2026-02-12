@@ -22,19 +22,13 @@ class URLDetector:
     )
 
     # arXiv
-    ARXIV_PATTERN = re.compile(
-        r"https?://arxiv\.org/abs/(\d{4}\.\d{4,5}(?:v\d+)?)"
-    )
+    ARXIV_PATTERN = re.compile(r"https?://arxiv\.org/abs/(\d{4}\.\d{4,5}(?:v\d+)?)")
 
     # DOI
-    DOI_PATTERN = re.compile(
-        r"https?://doi\.org/(10\.\d{4,}/[^\s<>\"]+?)(?:\s|<|>|\"|$)"
-    )
+    DOI_PATTERN = re.compile(r"https?://doi\.org/(10\.\d{4,}/[^\s<>\"]+?)(?:\s|<|>|\"|$)")
 
     # PyPI
-    PYPI_PATTERN = re.compile(
-        r"https?://pypi\.org/project/([a-zA-Z0-9_-]+)/?(?:\s|\)|\?|#|$)"
-    )
+    PYPI_PATTERN = re.compile(r"https?://pypi\.org/project/([a-zA-Z0-9_-]+)/?(?:\s|\)|\?|#|$)")
 
     # npm
     NPM_PATTERN = re.compile(
@@ -60,33 +54,48 @@ class URLDetector:
             matched_text = match.group(0).rstrip("/ \t\r\n?#)")
             protocol = "https" if matched_text.startswith("https") else "http"
             full_url = f"{protocol}://github.com/{owner}/{repo}"
-            detected.append((match.start(), DetectedURL(
-                url=full_url,
-                url_type="github_repo",
-                extracted_id=f"{owner}/{repo}",
-            )))
+            detected.append(
+                (
+                    match.start(),
+                    DetectedURL(
+                        url=full_url,
+                        url_type="github_repo",
+                        extracted_id=f"{owner}/{repo}",
+                    ),
+                )
+            )
 
         # Detect arXiv papers
         for match in self.ARXIV_PATTERN.finditer(text):
             arxiv_id = match.group(1)
             full_url = match.group(0).rstrip(" \t\r\n)")
-            detected.append((match.start(), DetectedURL(
-                url=full_url,
-                url_type="arxiv",
-                extracted_id=arxiv_id,
-            )))
+            detected.append(
+                (
+                    match.start(),
+                    DetectedURL(
+                        url=full_url,
+                        url_type="arxiv",
+                        extracted_id=arxiv_id,
+                    ),
+                )
+            )
 
         # Detect DOIs
         for match in self.DOI_PATTERN.finditer(text):
             doi = match.group(1)
             matched_text = match.group(0)
             # Strip trailing whitespace, delimiters, and sentence-ending punctuation
-            full_url = matched_text.rstrip(" \t\r\n<>\".)")
-            detected.append((match.start(), DetectedURL(
-                url=full_url,
-                url_type="doi",
-                extracted_id=doi,
-            )))
+            full_url = matched_text.rstrip(' \t\r\n<>".)')
+            detected.append(
+                (
+                    match.start(),
+                    DetectedURL(
+                        url=full_url,
+                        url_type="doi",
+                        extracted_id=doi,
+                    ),
+                )
+            )
 
         # Detect PyPI packages
         for match in self.PYPI_PATTERN.finditer(text):
@@ -94,11 +103,16 @@ class URLDetector:
             matched_text = match.group(0)
             protocol = "https" if matched_text.startswith("https") else "http"
             base_url = f"{protocol}://pypi.org/project/{package}"
-            detected.append((match.start(), DetectedURL(
-                url=base_url,
-                url_type="pypi",
-                extracted_id=package,
-            )))
+            detected.append(
+                (
+                    match.start(),
+                    DetectedURL(
+                        url=base_url,
+                        url_type="pypi",
+                        extracted_id=package,
+                    ),
+                )
+            )
 
         # Detect npm packages
         for match in self.NPM_PATTERN.finditer(text):
@@ -108,11 +122,16 @@ class URLDetector:
             protocol = "https" if matched_text.startswith("https") else "http"
             www_part = "www." if has_www else ""
             base_url = f"{protocol}://{www_part}npmjs.com/package/{package}"
-            detected.append((match.start(), DetectedURL(
-                url=base_url,
-                url_type="npm",
-                extracted_id=package,
-            )))
+            detected.append(
+                (
+                    match.start(),
+                    DetectedURL(
+                        url=base_url,
+                        url_type="npm",
+                        extracted_id=package,
+                    ),
+                )
+            )
 
         # Sort by position and return just the DetectedURL objects
         detected.sort(key=lambda x: x[0])

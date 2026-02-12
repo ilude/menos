@@ -8,7 +8,7 @@ from menos.models import JobStatus, PipelineJob
 from menos.services.callbacks import CallbackService
 from menos.services.jobs import JobRepository
 from menos.services.storage import SurrealDBRepository
-from menos.services.unified_pipeline import UnifiedPipelineService
+from menos.services.unified_pipeline import PipelineStageError, UnifiedPipelineService
 from menos.tasks import background_tasks
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,7 @@ class PipelineOrchestrator:
                     content_text=content_text,
                     content_type=content_type,
                     title=title,
+                    job_id=job_id,
                 )
 
                 if result:
@@ -159,6 +160,31 @@ class PipelineOrchestrator:
             except Exception:
                 pass
             raise
+        except PipelineStageError as e:
+            logger.error(
+                "Pipeline stage error for job %s: %s",
+                job_id,
+                e,
+                exc_info=True,
+            )
+            try:
+                await self.job_repo.update_job_status(
+                    job_id,
+                    JobStatus.FAILED,
+                    error_code=e.code,
+                    error_message=e.message[:500],
+                    error_stage=e.stage,
+                )
+                await self.surreal_repo.update_content_processing_status(
+                    content_id,
+                    "failed",
+                )
+            except Exception as inner_e:
+                logger.error(
+                    "Failed to update job status for %s: %s",
+                    job_id,
+                    inner_e,
+                )
         except Exception as e:
             logger.error("Pipeline failed for job %s: %s", job_id, e, exc_info=True)
             try:
@@ -167,10 +193,18 @@ class PipelineOrchestrator:
                     JobStatus.FAILED,
                     error_code="PIPELINE_EXCEPTION",
                     error_message=str(e)[:500],
+                    error_stage="unknown",
                 )
-                await self.surreal_repo.update_content_processing_status(content_id, "failed")
+                await self.surreal_repo.update_content_processing_status(
+                    content_id,
+                    "failed",
+                )
             except Exception as inner_e:
-                logger.error("Failed to update job status for %s: %s", job_id, inner_e)
+                logger.error(
+                    "Failed to update job status for %s: %s",
+                    job_id,
+                    inner_e,
+                )
 
     async def _fire_callback(
         self,

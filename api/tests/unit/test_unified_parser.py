@@ -12,7 +12,7 @@ from menos.services.unified_pipeline import parse_unified_response
 def mock_settings():
     """Create mock settings for unified pipeline."""
     s = MagicMock()
-    s.classification_max_new_labels = 3
+    s.unified_pipeline_max_new_tags = 3
     s.entity_max_topics_per_content = 7
     s.entity_min_confidence = 0.6
     return s
@@ -237,7 +237,7 @@ class TestNewTagsDedup:
         assert "homelab" in result.new_tags
 
     def test_max_new_tags_respected(self, existing_tags, mock_settings):
-        mock_settings.classification_max_new_labels = 2
+        mock_settings.unified_pipeline_max_new_tags = 2
         data = {
             "tags": [],
             "new_tags": ["tag-a", "tag-b", "tag-c", "tag-d"],

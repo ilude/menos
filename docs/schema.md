@@ -2,7 +2,7 @@
 
 ## Overview
 
-Menos uses SurrealDB in SCHEMAFULL mode (strict field definitions) for all metadata, embeddings, and relationship storage. MinIO handles file content separately. The schema supports content management, vector semantic search, knowledge graphs (entities), and content classification.
+Menos uses SurrealDB in SCHEMAFULL mode (strict field definitions) for all metadata, embeddings, and relationship storage. MinIO handles file content separately. The schema supports content management, vector semantic search, knowledge graphs (entities), and unified pipeline processing with job tracking.
 
 ## Entity Relationship Diagram
 
@@ -21,12 +21,26 @@ erDiagram
         object metadata
         datetime created_at
         datetime updated_at
-        string entity_extraction_status
-        datetime entity_extraction_at
-        string classification_status
-        datetime classification_at
-        string classification_tier
-        int classification_score
+        string processing_status
+        datetime processed_at
+        string pipeline_version
+    }
+
+    pipeline_job {
+        RecordID id PK
+        string resource_key
+        record_content content_id FK
+        string status
+        string pipeline_version
+        string data_tier
+        string idempotency_key
+        string error_code
+        string error_message
+        string error_stage
+        object metadata
+        datetime created_at
+        datetime started_at
+        datetime finished_at
     }
 
     chunk {
@@ -75,6 +89,7 @@ erDiagram
     content ||--o{ link : "source of"
     content ||--o{ link : "target of"
     content ||--o{ content_entity : "has entities"
+    content ||--o{ pipeline_job : "processed by"
     entity ||--o{ content_entity : "appears in"
 ```
 
@@ -94,16 +109,13 @@ Primary metadata table for all ingested items. Each record represents one docume
 | `file_size` | int | required | Bytes (from MinIO) |
 | `file_path` | string | required | MinIO object path |
 | `author` | option\<string\> | — | Uploader key ID |
-| `tags` | array | `[]` | User-defined tags |
+| `tags` | array | `[]` | User-defined and LLM-assigned tags |
 | `metadata` | object | `{}` | Content-type-specific fields (see below) |
 | `created_at` | datetime | auto | UTC |
 | `updated_at` | datetime | auto | UTC |
-| `entity_extraction_status` | option\<string\> | — | `pending` → `processing` → `completed` / `failed` |
-| `entity_extraction_at` | option\<datetime\> | — | Last extraction timestamp |
-| `classification_status` | option\<string\> | — | `pending` → `completed` / `failed` |
-| `classification_at` | option\<datetime\> | — | Last classification timestamp |
-| `classification_tier` | option\<string\> | — | `S`, `A`, `B`, `C`, or `D` |
-| `classification_score` | option\<int\> | — | 1–100 |
+| `processing_status` | option\<string\> | — | `pending` → `processing` → `completed` / `failed` |
+| `processed_at` | option\<datetime\> | — | Last processing timestamp |
+| `pipeline_version` | option\<string\> | — | Pipeline version that processed this content |
 
 **Indexes:**
 
@@ -112,7 +124,6 @@ Primary metadata table for all ingested items. Each record represents one docume
 | `idx_content_type` | BTree | `content_type` | Filter by type |
 | `idx_content_created_at` | BTree | `created_at` | Time-based queries |
 | `idx_content_tags` | BTree | `tags` | Tag filtering (`CONTAINSALL`) |
-| `idx_content_classification_tier` | BTree | `classification_tier` | Tier filtering |
 
 **`metadata` field by content type:**
 
@@ -127,18 +138,48 @@ flowchart LR
         YM --- YF5["thumbnail_url: string"]
         YM --- YF6["published_at: string"]
         YM --- YF7["language: string"]
-        YM --- YF8["classification: object"]
+        YM --- YF8["unified_result: object"]
     end
 
     subgraph General["content_type = text/pdf"]
         GM["metadata"]
         GM --- GF1["custom_fields: any"]
-        GM --- GF2["classification: object"]
+        GM --- GF2["unified_result: object"]
     end
 
     style YouTube fill:#e3f2fd,stroke:#1976d2
     style General fill:#f3e5f5,stroke:#7b1fa2
 ```
+
+### pipeline_job
+
+Pipeline job table for job-first authority model. Each job represents a single processing run for a piece of content.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `id` | RecordID | auto | `pipeline_job:ulid` |
+| `resource_key` | string | required | Canonical resource key for deduplication |
+| `content_id` | record\<content\> | required | Content being processed |
+| `status` | string | `"pending"` | `pending` → `processing` → `completed` / `failed` / `cancelled` |
+| `pipeline_version` | string | required | App version at job creation |
+| `data_tier` | string | `"compact"` | `compact` or `full` |
+| `idempotency_key` | option\<string\> | — | Optional client-provided key |
+| `error_code` | option\<string\> | — | Error code if failed |
+| `error_message` | option\<string\> | — | Error message if failed |
+| `error_stage` | option\<string\> | — | Pipeline stage where error occurred |
+| `metadata` | option\<object\> | — | Additional job metadata |
+| `created_at` | datetime | auto | UTC |
+| `started_at` | option\<datetime\> | — | When processing began |
+| `finished_at` | option\<datetime\> | — | When processing completed/failed |
+
+**Indexes:**
+
+| Index | Type | Fields | Purpose |
+|---|---|---|---|
+| `idx_job_resource_key` | BTree | `resource_key` | Deduplication by resource key |
+| `idx_job_content_id` | BTree | `content_id` | Find all jobs for a content item |
+| `idx_job_status` | BTree | `status` | Filter jobs by status |
+| `idx_job_idempotency` | BTree (UNIQUE) | `idempotency_key` | Idempotent job submission |
 
 ### chunk
 
@@ -295,6 +336,7 @@ flowchart TD
 
     subgraph Tables["SurrealDB Tables"]
         CT["content\n(metadata)"]
+        JB["pipeline_job\n(processing jobs)"]
         CH["chunk\n(embeddings)"]
         LK["link\n(doc relationships)"]
         EN["entity\n(knowledge graph nodes)"]
@@ -303,6 +345,7 @@ flowchart TD
 
     MINIO -.->|"file_path reference"| CT
     CT -->|"1:N"| CH
+    CT -->|"1:N"| JB
     CT -->|"source/target"| LK
     CT -->|"content_id"| CE
     EN -->|"entity_id"| CE
@@ -323,6 +366,16 @@ flowchart TD
     style Tables fill:#e8f5e9,stroke:#4caf50
     style Search fill:#e3f2fd,stroke:#1976d2
 ```
+
+## Resource Key Patterns
+
+Resource keys provide canonical deduplication for content across ingestion methods:
+
+| Pattern | Description | Example |
+|---------|-------------|---------|
+| `yt:<video_id>` | YouTube video | `yt:dQw4w9WgXcQ` |
+| `url:<hash16>` | URL-based content | `url:a3b4c5d6e7f8g9h0` |
+| `cid:<content_id>` | Content ID fallback | `cid:content:01HZYX...` |
 
 ## RecordID Patterns
 
@@ -369,10 +422,9 @@ timeline
                : BTree on content.tags
     2026-02-01 : Add entity tables
                : entity + content_entity
-               : Entity extraction fields on content
-    2026-02-10 : Add classification
-               : classification_status, tier, score
-               : Tier index
+    2026-02-11 : Unified pipeline
+               : pipeline_job table
+               : processing_status, processed_at, pipeline_version on content
 ```
 
 | Migration | Key Changes |
@@ -382,8 +434,8 @@ timeline
 | `20260201-160500_fix_vector_index_dimension` | MTREE corrected to 1024D for mxbai-embed-large |
 | `20260201-160600_add_link_edge_table` | `link` table with source/target indexes |
 | `20260201-170000_add_content_tags_index` | BTree index on `content.tags` |
-| `20260201-180000_add_entity_tables` | `entity` + `content_entity` tables, extraction status fields |
-| `20260210-120000_add_classification_fields` | Classification status, tier, score fields + tier index |
+| `20260201-180000_add_entity_tables` | `entity` + `content_entity` tables |
+| `20260211-120100_pipeline_job` | `pipeline_job` table, unified pipeline status fields on content |
 
 ## Index Summary
 
@@ -393,17 +445,20 @@ flowchart LR
         B1["content_type"]
         B2["created_at"]
         B3["tags"]
-        B4["classification_tier"]
-        B5["chunk.content_id"]
-        B6["link.source"]
-        B7["link.target"]
-        B8["entity.entity_type"]
-        B9["entity.normalized_name"]
-        B10["entity.hierarchy"]
-        B11["content_entity.content_id"]
-        B12["content_entity.entity_id"]
-        B13["content_entity.edge_type"]
-        B14["content_entity UNIQUE\n(content_id, entity_id, edge_type)"]
+        B4["chunk.content_id"]
+        B5["link.source"]
+        B6["link.target"]
+        B7["entity.entity_type"]
+        B8["entity.normalized_name"]
+        B9["entity.hierarchy"]
+        B10["content_entity.content_id"]
+        B11["content_entity.entity_id"]
+        B12["content_entity.edge_type"]
+        B13["content_entity UNIQUE\n(content_id, entity_id, edge_type)"]
+        B14["pipeline_job.resource_key"]
+        B15["pipeline_job.content_id"]
+        B16["pipeline_job.status"]
+        B17["pipeline_job.idempotency_key (UNIQUE)"]
     end
 
     subgraph MTREE["MTREE Index"]
@@ -422,3 +477,4 @@ flowchart LR
 4. **Vector guard required** — always filter `WHERE embedding != NONE` before cosine similarity
 5. **Concurrent MTREE build** — vector index built in background to avoid transaction conflicts
 6. **RecordID conversion** — must handle `RecordID` → string on read, string → `RecordID` on parameterized write
+7. **Resource key deduplication** — one active job per resource key at a time

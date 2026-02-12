@@ -19,6 +19,7 @@ class GraphNode(BaseModel):
     title: str | None = None
     content_type: str
     tags: list[str] = []
+    processing_status: str | None = None
 
 
 class GraphEdge(BaseModel):
@@ -66,6 +67,7 @@ async def get_graph(
             title=node.title,
             content_type=node.content_type,
             tags=node.tags or [],
+            processing_status=getattr(node, "processing_status", None),
         )
         for node in nodes_data
     ]
@@ -120,6 +122,7 @@ async def get_neighborhood(
             title=node.title,
             content_type=node.content_type,
             tags=node.tags or [],
+            processing_status=getattr(node, "processing_status", None),
         )
         for node in nodes_data
     ]

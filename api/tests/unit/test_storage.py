@@ -1523,23 +1523,6 @@ class TestFindOrCreateEntity:
         assert entity.id == "new2"
 
 
-class TestUpdateContentExtractionStatus:
-    """Tests for update_content_extraction_status."""
-
-    @pytest.mark.asyncio
-    async def test_update_extraction_status(self):
-        mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-
-        await repo.update_content_extraction_status("c1", "completed")
-
-        mock_db.query.assert_called_once()
-        call_args = mock_db.query.call_args[0]
-        assert "entity_extraction_status" in call_args[0]
-        assert call_args[1]["content_id"] == RecordID("content", "c1")
-        assert call_args[1]["status"] == "completed"
-
-
 class TestGetTopicHierarchy:
     """Tests for get_topic_hierarchy."""
 
@@ -1582,115 +1565,6 @@ class TestGetTopicHierarchy:
         repo = SurrealDBRepository(mock_db, "ns", "db")
         topics = await repo.get_topic_hierarchy()
         assert topics == []
-
-
-class TestClassificationMethods:
-    """Tests for classification-related methods."""
-
-    @pytest.mark.asyncio
-    async def test_update_classification_status(self):
-        mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-
-        await repo.update_content_classification_status(
-            "c1", "processing"
-        )
-
-        mock_db.query.assert_called_once()
-        call_args = mock_db.query.call_args[0]
-        assert "classification_status" in call_args[0]
-        assert call_args[1]["content_id"] == RecordID("content", "c1")
-        assert call_args[1]["status"] == "processing"
-
-    @pytest.mark.asyncio
-    async def test_update_content_classification(self):
-        mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-
-        classification = {
-            "tier": "A",
-            "quality_score": 85,
-            "labels": ["tutorial"],
-        }
-        await repo.update_content_classification("c1", classification)
-
-        mock_db.query.assert_called_once()
-        call_args = mock_db.query.call_args[0]
-        assert "metadata.classification" in call_args[0]
-        assert "classification_tier" in call_args[0]
-        assert "classification_score" in call_args[0]
-        assert call_args[1]["data"] == classification
-        assert call_args[1]["tier"] == "A"
-        assert call_args[1]["score"] == 85
-
-    @pytest.mark.asyncio
-    async def test_update_content_classification_defaults(self):
-        mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-
-        classification = {"labels": ["reference"]}
-        await repo.update_content_classification("c1", classification)
-
-        call_args = mock_db.query.call_args[0]
-        assert call_args[1]["tier"] == ""
-        assert call_args[1]["score"] == 0
-
-
-class TestGetInterestProfile:
-    """Tests for get_interest_profile."""
-
-    @pytest.mark.asyncio
-    async def test_returns_all_signals(self):
-        mock_db = MagicMock()
-        mock_db.query.side_effect = [
-            [{"result": [{"name": "AI"}, {"name": "ML"}]}],
-            [{"result": [{"tag": "python"}, {"tag": "ml"}]}],
-            [
-                {
-                    "result": [
-                        {"channel": "3Blue1Brown"},
-                        {"channel": "Fireship"},
-                    ]
-                }
-            ],
-        ]
-
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-        profile = await repo.get_interest_profile()
-
-        assert profile["topics"] == ["AI", "ML"]
-        assert profile["tags"] == ["python", "ml"]
-        assert profile["channels"] == ["3Blue1Brown", "Fireship"]
-
-    @pytest.mark.asyncio
-    async def test_handles_empty_results(self):
-        mock_db = MagicMock()
-        mock_db.query.side_effect = [
-            [{"result": []}],
-            [{"result": []}],
-            [{"result": []}],
-        ]
-
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-        profile = await repo.get_interest_profile()
-
-        assert profile == {"topics": [], "tags": [], "channels": []}
-
-    @pytest.mark.asyncio
-    async def test_skips_none_values(self):
-        mock_db = MagicMock()
-        mock_db.query.side_effect = [
-            [{"result": [{"name": "AI"}, {"name": None}]}],
-            [{"result": [{"tag": None}]}],
-            [{"result": [{"channel": "Test"}, {"other": "x"}]}],
-        ]
-
-        repo = SurrealDBRepository(mock_db, "ns", "db")
-        profile = await repo.get_interest_profile()
-
-        assert profile["topics"] == ["AI"]
-        assert profile["tags"] == []
-        assert profile["channels"] == ["Test"]
 
 
 class TestFindPotentialDuplicates:

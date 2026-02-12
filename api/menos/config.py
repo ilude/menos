@@ -63,28 +63,16 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None
 
-    # Entity Extraction
-    entity_extraction_enabled: bool = True
-    entity_extraction_provider: LLMProviderType = "openrouter"
-    entity_extraction_model: str = ""
-
     # Unified Pipeline
     unified_pipeline_enabled: bool = True
     unified_pipeline_provider: LLMProviderType = "openrouter"
     unified_pipeline_model: str = ""
     unified_pipeline_max_concurrency: int = 4
+    unified_pipeline_max_new_tags: int = 3
 
     # Pipeline Callbacks
     callback_url: str | None = None
     callback_secret: str | None = None
-
-    # Content Classification
-    classification_enabled: bool = True
-    classification_provider: LLMProviderType = "openrouter"
-    classification_model: str = ""
-    classification_max_new_labels: int = 3
-    classification_interest_top_n: int = 15
-    classification_min_content_length: int = 500
 
     # API Keys for Metadata Fetching (optional)
     semantic_scholar_api_key: str | None = None

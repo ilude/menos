@@ -89,7 +89,11 @@ class CallbackService:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     response = await client.post(self.callback_url, content=body, headers=headers)
                     response.raise_for_status()
-                    logger.info("Callback delivered for job %s (attempt %d)", job.id, attempt)
+                    logger.info(
+                        "audit.callback_delivery job_id=%s attempt=%d success=true",
+                        job.id,
+                        attempt,
+                    )
                     return
             except Exception as e:
                 logger.warning(
@@ -103,7 +107,7 @@ class CallbackService:
                     await asyncio.sleep(delay)
 
         logger.error(
-            "Callback delivery failed after %d attempts for job %s",
-            len(delays),
+            "audit.callback_delivery job_id=%s attempt=%d success=false",
             job.id,
+            len(delays),
         )

@@ -1,7 +1,5 @@
 """Tests for resource key generation and URL normalization."""
 
-import pytest
-
 from menos.services.resource_key import generate_resource_key, normalize_url
 
 
