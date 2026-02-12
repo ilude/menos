@@ -40,8 +40,26 @@ class TestYouTubeSmoke:
 
         video = response.json()
         assert isinstance(video["video_id"], str)
-        assert isinstance(video["transcript_preview"], str)
+        assert isinstance(video["content_id"], str)
         assert isinstance(video["chunk_count"], int)
+        # Pipeline fields may be None if not yet processed
+        assert "transcript" in video
+        assert "summary" in video
+        assert "quality_tier" in video
+
+    def test_youtube_get_transcript(self, smoke_authed_get, smoke_first_youtube_video_id):
+        """GET /api/v1/youtube/{video_id}/transcript returns plain text."""
+        response = smoke_authed_get(
+            f"/api/v1/youtube/{smoke_first_youtube_video_id}/transcript"
+        )
+        assert response.status_code == 200
+        assert "text/plain" in response.headers.get("content-type", "")
+        assert len(response.text) > 0
+
+    def test_youtube_get_video_not_found(self, smoke_authed_get):
+        """GET /api/v1/youtube/{video_id} returns 404 for unknown video."""
+        response = smoke_authed_get("/api/v1/youtube/NONEXISTENT99")
+        assert response.status_code == 404
 
     def test_youtube_channels(self, smoke_authed_get):
         """GET /api/v1/youtube/channels returns channels list."""
