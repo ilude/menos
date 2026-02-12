@@ -1,4 +1,4 @@
-.PHONY: deploy update backup reboot shell build logs status test lint \
+.PHONY: deploy update backup backup-setup reboot shell build logs status test lint \
 	version-show version-check version-set version-bump-major version-bump-minor version-bump-patch
 
 VERSION_FILE = api/pyproject.toml
@@ -48,6 +48,10 @@ update:
 backup:
 	$(ANSIBLE_CMD) ansible-playbook playbooks/backup.yml
 
+# Set up data backup infrastructure (cron, script, directories)
+backup-setup:
+	$(ANSIBLE_CMD) ansible-playbook playbooks/backup-setup.yml
+
 # Reboot remote server (fixes nvidia driver mismatch)
 reboot:
 	$(ANSIBLE_CMD) ansible-playbook playbooks/reboot.yml
@@ -95,6 +99,7 @@ test-infra:
 	$(ANSIBLE_CMD) --syntax-check playbooks/deploy.yml
 	$(ANSIBLE_CMD) --syntax-check playbooks/update.yml
 	$(ANSIBLE_CMD) --syntax-check playbooks/backup.yml
+	$(ANSIBLE_CMD) --syntax-check playbooks/backup-setup.yml
 	@echo "All playbooks OK"
 
 # Semantic versioning helpers
