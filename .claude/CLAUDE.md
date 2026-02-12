@@ -15,4 +15,6 @@ Project context is in `.claude/rules/`:
 
 Available reusable skills are in `.claude/skills/`.
 
+- LLM architecture boundary: all feature `generate()` calls must go through DI-provided metered wrappers; do not call raw provider implementations directly in feature code.
+
 - Clarifications: Default to `AskUserQuestion` when clarification is needed. Exception: if the user explicitly requests direct in-chat discussion (for example, one-question-at-a-time 1-3-1), respond directly in chat and do not use `AskUserQuestion` for that discussion flow.

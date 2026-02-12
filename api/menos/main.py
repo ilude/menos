@@ -10,7 +10,8 @@ from fastapi import FastAPI
 from surrealdb import Surreal
 
 from menos.config import get_settings
-from menos.routers import auth, content, entities, graph, health, jobs, search, youtube
+from menos.routers import auth, content, entities, graph, health, jobs, search, usage, youtube
+from menos.services.di import get_llm_pricing_service
 from menos.services.migrator import MigrationService
 from menos.tasks import background_tasks
 
@@ -113,12 +114,17 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     run_migrations()
     _run_purge()
-    yield
-    if background_tasks:
-        logger.info("Waiting for %d background task(s)...", len(background_tasks))
-        _done, pending = await asyncio.wait(background_tasks, timeout=30.0)
-        for t in pending:
-            t.cancel()
+    pricing_service = await get_llm_pricing_service()
+    await pricing_service.start_scheduler()
+    try:
+        yield
+    finally:
+        await pricing_service.stop_scheduler()
+        if background_tasks:
+            logger.info("Waiting for %d background task(s)...", len(background_tasks))
+            _done, pending = await asyncio.wait(background_tasks, timeout=30.0)
+            for t in pending:
+                t.cancel()
 
 
 app = FastAPI(
@@ -139,6 +145,7 @@ app.include_router(content.router, prefix="/api/v1")
 app.include_router(entities.router, prefix="/api/v1")
 app.include_router(graph.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
+app.include_router(usage.router, prefix="/api/v1")
 app.include_router(youtube.router, prefix="/api/v1")
 app.include_router(jobs.content_router, prefix="/api/v1")
 app.include_router(jobs.jobs_router, prefix="/api/v1")

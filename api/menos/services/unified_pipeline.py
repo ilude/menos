@@ -380,6 +380,15 @@ class UnifiedPipelineService:
         self.repo = repo
         self.settings = settings
 
+    def _provider_for_job(self, job_id: str | None) -> LLMProvider:
+        """Return provider with per-job metering context when supported."""
+        if not job_id:
+            return self.llm
+        with_context = getattr(self.llm, "with_context", None)
+        if callable(with_context):
+            return with_context(f"pipeline:{job_id}")
+        return self.llm
+
     async def process(
         self,
         content_id: str,
@@ -477,8 +486,9 @@ class UnifiedPipelineService:
 
         # Call LLM
         t0 = time.monotonic()
+        llm_provider = self._provider_for_job(job_id)
         try:
-            response = await self.llm.generate(
+            response = await llm_provider.generate(
                 prompt,
                 temperature=0.3,
                 max_tokens=3000,
@@ -526,7 +536,7 @@ class UnifiedPipelineService:
         )
 
         # Record model name and timestamp
-        result.model = getattr(self.llm, "model", "fallback_chain")
+        result.model = getattr(llm_provider, "model", "fallback_chain")
         result.processed_at = datetime.now(UTC).isoformat()
 
         logger.info(

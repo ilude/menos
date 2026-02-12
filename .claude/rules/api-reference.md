@@ -71,6 +71,9 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 - `POST /api/v1/search` — Semantic vector search (`{"query": "...", "tags": [...], "limit": 20}`)
 - `POST /api/v1/search/agentic` — Agentic search (expansion + RRF + rerank + synthesis)
 
+### Usage
+- `GET /api/v1/usage` — Aggregated LLM usage and cost totals (`start_date`, `end_date`, `provider`, `model` filters)
+
 ### YouTube
 - `POST /api/v1/youtube/ingest` — Ingest video by URL
 - `GET /api/v1/youtube/{video_id}` — Full detail (transcript, pipeline results, YouTube metadata)
