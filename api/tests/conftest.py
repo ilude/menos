@@ -16,11 +16,13 @@ from fastapi.testclient import TestClient
 
 from menos.client.signer import RequestSigner
 from menos.services.di import (
+    get_docling_client,
     get_job_repository,
     get_minio_storage,
     get_pipeline_orchestrator,
     get_surreal_repo,
 )
+from menos.services.docling import DoclingResult
 from menos.services.embeddings import EmbeddingService, get_embedding_service
 from menos.services.youtube import get_youtube_service
 from menos.services.youtube_metadata import get_youtube_metadata_service
@@ -91,6 +93,7 @@ def mock_surreal_repo():
     repo.get_graph_data = AsyncMock(return_value=([], []))
     repo.get_neighborhood = AsyncMock(return_value=([], []))
     repo.update_content_extraction_status = AsyncMock()
+    repo.find_content_by_resource_key = AsyncMock(return_value=None)
     return repo
 
 
@@ -141,6 +144,16 @@ def mock_pipeline_orchestrator():
 
 
 @pytest.fixture
+def mock_docling_client():
+    """Mock Docling client."""
+    client = MagicMock()
+    client.extract_markdown = AsyncMock(
+        return_value=DoclingResult(markdown="# Title\nBody", title="Title")
+    )
+    return client
+
+
+@pytest.fixture
 def mock_job_repository():
     """Mock job repository."""
     repo = MagicMock()
@@ -163,6 +176,7 @@ def app_with_keys(
     mock_metadata_service,
     mock_pipeline_orchestrator,
     mock_job_repository,
+    mock_docling_client,
 ):
     """Create FastAPI app with test keys configured."""
     monkeypatch.setenv("SSH_PUBLIC_KEYS_PATH", str(keys_dir))
@@ -188,6 +202,7 @@ def app_with_keys(
     app.dependency_overrides[get_youtube_metadata_service] = lambda: mock_metadata_service
     app.dependency_overrides[get_pipeline_orchestrator] = lambda: mock_pipeline_orchestrator
     app.dependency_overrides[get_job_repository] = lambda: mock_job_repository
+    app.dependency_overrides[get_docling_client] = lambda: mock_docling_client
 
     yield app
 

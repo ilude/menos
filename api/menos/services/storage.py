@@ -552,6 +552,17 @@ class SurrealDBRepository:
             return self._parse_content(raw_items[0])
         return None
 
+    async def find_content_by_resource_key(self, resource_key: str) -> ContentMetadata | None:
+        """Find content by metadata.resource_key."""
+        result = self.db.query(
+            "SELECT * FROM content WHERE metadata.resource_key = $resource_key LIMIT 1",
+            {"resource_key": resource_key},
+        )
+        raw_items = self._parse_query_result(result)
+        if raw_items:
+            return self._parse_content(raw_items[0])
+        return None
+
     async def create_link(self, link: LinkModel) -> LinkModel:
         """Create link between content items.
 

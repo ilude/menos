@@ -10,7 +10,18 @@ from fastapi import FastAPI
 from surrealdb import Surreal
 
 from menos.config import get_settings
-from menos.routers import auth, content, entities, graph, health, jobs, search, usage, youtube
+from menos.routers import (
+    auth,
+    content,
+    entities,
+    graph,
+    health,
+    ingest,
+    jobs,
+    search,
+    usage,
+    youtube,
+)
 from menos.services.di import get_llm_pricing_service, get_surreal_repo
 from menos.services.migrator import MigrationService
 from menos.tasks import background_tasks
@@ -177,5 +188,6 @@ app.include_router(graph.content_router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(usage.router, prefix="/api/v1")
 app.include_router(youtube.router, prefix="/api/v1")
+app.include_router(ingest.router, prefix="/api/v1")
 app.include_router(jobs.content_router, prefix="/api/v1")
 app.include_router(jobs.jobs_router, prefix="/api/v1")

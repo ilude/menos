@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "mxbai-embed-large"
 
+    # Docling
+    docling_url: str = "http://docling-serve:5001"
+
     # Auth
     ssh_public_keys_path: Path = Path("/keys")
 

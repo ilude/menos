@@ -41,6 +41,15 @@ services:
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
     restart: unless-stopped
 
+  docling-serve:
+    image: quay.io/docling-project/docling-serve-cpu
+    container_name: menos-docling-serve
+    ports:
+      - "5001:5001"
+    environment:
+      - DOCLING_SERVE_ENABLE_UI=0
+    restart: unless-stopped
+
   menos-api:
     build:
       context: ./api
@@ -54,6 +63,7 @@ services:
       - surrealdb
       - minio
       - ollama
+      - docling-serve
     environment:
       - SURREALDB_URL=http://surrealdb:8000
       - SURREALDB_USER=root

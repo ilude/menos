@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlparse
 
 
 @dataclass
@@ -34,6 +35,9 @@ class URLDetector:
     NPM_PATTERN = re.compile(
         r"https?://(?:www\.)?npmjs\.com/package/([@a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)?)/?(?:\s|\)|\?|#|$)"
     )
+
+    YOUTUBE_WATCH_PATTERN = re.compile(r"(?:youtube\.com|m\.youtube\.com|www\.youtube\.com)")
+    YOUTUBE_SHORT_PATTERN = re.compile(r"(?:youtu\.be)/([0-9A-Za-z_-]{11})")
 
     def detect_urls(self, text: str) -> list[DetectedURL]:
         """
@@ -161,3 +165,44 @@ class URLDetector:
         """Detect only npm package URLs."""
         all_urls = self.detect_urls(text)
         return [url for url in all_urls if url.url_type == "npm"]
+
+    def classify_url(self, url: str) -> DetectedURL:
+        """Classify a single URL for ingest routing."""
+        parsed = urlparse(url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return DetectedURL(url=url, url_type="unknown", extracted_id="")
+
+        youtube_id = self._extract_youtube_id(parsed)
+        if youtube_id:
+            return DetectedURL(url=url, url_type="youtube", extracted_id=youtube_id)
+
+        detected = self.detect_urls(url)
+        if detected:
+            return detected[0]
+
+        return DetectedURL(url=url, url_type="web", extracted_id="")
+
+    def _extract_youtube_id(self, parsed_url) -> str | None:
+        netloc = (parsed_url.netloc or "").lower()
+        path = parsed_url.path or ""
+
+        short_match = self.YOUTUBE_SHORT_PATTERN.search(f"{netloc}{path}")
+        if short_match:
+            return short_match.group(1)
+
+        if not self.YOUTUBE_WATCH_PATTERN.search(netloc):
+            return None
+
+        query = parse_qs(parsed_url.query)
+        if "v" in query and query["v"]:
+            video_id = query["v"][0]
+            if re.fullmatch(r"[0-9A-Za-z_-]{11}", video_id):
+                return video_id
+
+        path_parts = [part for part in path.split("/") if part]
+        if len(path_parts) >= 2 and path_parts[0] in {"shorts", "embed"}:
+            video_id = path_parts[1]
+            if re.fullmatch(r"[0-9A-Za-z_-]{11}", video_id):
+                return video_id
+
+        return None

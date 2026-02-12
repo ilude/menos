@@ -9,6 +9,7 @@ from surrealdb import Surreal
 
 from menos.config import settings
 from menos.services.agent import AgentService
+from menos.services.docling import DoclingClient
 from menos.services.embeddings import get_embedding_service
 from menos.services.llm import LLMProvider, OllamaLLMProvider
 from menos.services.llm_metering import MeteringLLMProvider
@@ -402,3 +403,8 @@ def get_callback_service():
     from menos.services.callbacks import CallbackService
 
     return CallbackService(settings)
+
+
+def get_docling_client() -> DoclingClient:
+    """Get Docling client instance for dependency injection."""
+    return DoclingClient(settings.docling_url)
