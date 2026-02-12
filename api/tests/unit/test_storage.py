@@ -2140,7 +2140,7 @@ class TestGetRelatedContent:
         call_args = mock_db.query.call_args[0]
         assert "HAVING shared_entity_count >= 2" in call_args[0]
         assert "ORDER BY shared_entity_count DESC, created_at DESC, content_id ASC" in call_args[0]
-        assert "candidate.created_at >= time::now() - 12m" in call_args[0]
+        assert "content_id.created_at >= time::now() - 12m" in call_args[0]
         assert "entity_type" not in call_args[0]
         assert call_args[1]["source_content_id"] == RecordID("content", "source-id")
         assert call_args[1]["limit"] == 10

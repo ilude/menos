@@ -628,30 +628,28 @@ class SurrealDBRepository:
 
         recency_clause = ""
         if window != "0":
-            recency_clause = f"AND candidate.created_at >= time::now() - {window}"
+            recency_clause = f"AND content_id.created_at >= time::now() - {window}"
 
         query = f"""
+            LET $source_entities = (
+                SELECT entity_id
+                FROM content_entity
+                WHERE content_id = $source_content_id
+            );
+
             SELECT
-                candidate.id AS content_id,
-                candidate.title AS title,
-                candidate.content_type AS content_type,
-                count(array::distinct(entity_id)) AS shared_entity_count,
-                array::sort(array::distinct(shared_entity_names)) AS shared_entities,
-                candidate.created_at AS created_at
-            FROM (
-                SELECT
-                    ce_other.content_id AS candidate,
-                    ce_source.entity_id AS entity_id,
-                    ce_source.entity_id.name AS shared_entity_names
-                FROM content_entity AS ce_source,
-                    (SELECT content_id FROM content_entity
-                     WHERE entity_id = ce_source.entity_id) AS ce_other
-                WHERE ce_source.content_id = $source_content_id
-                    AND ce_other.content_id != $source_content_id
-            )
-            GROUP BY candidate
+                content_id AS content_id,
+                content_id.title AS title,
+                content_id.content_type AS content_type,
+                count() AS shared_entity_count,
+                array::sort(array::group(entity_id.name)) AS shared_entities,
+                content_id.created_at AS created_at
+            FROM content_entity
+            WHERE entity_id IN $source_entities
+                AND content_id != $source_content_id
+                {recency_clause}
+            GROUP BY content_id, title, content_type, created_at
             HAVING shared_entity_count >= 2
-            {recency_clause}
             ORDER BY shared_entity_count DESC, created_at DESC, content_id ASC
             LIMIT $limit
         """
