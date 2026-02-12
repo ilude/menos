@@ -2138,7 +2138,7 @@ class TestGetRelatedContent:
         assert related[0].shared_entities == ["topic:python", "repo:uv", "person:astral"]
 
         call_args = mock_db.query.call_args[0]
-        assert "HAVING shared_entity_count >= 2" in call_args[0]
+        assert "WHERE shared_entity_count >= 2" in call_args[0]
         assert "ORDER BY shared_entity_count DESC, created_at DESC, content_id ASC" in call_args[0]
         assert "content_id.created_at >= time::now() - 12m" in call_args[0]
         assert "entity_type" not in call_args[0]

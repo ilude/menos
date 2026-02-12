@@ -638,18 +638,27 @@ class SurrealDBRepository:
             );
 
             SELECT
-                content_id AS content_id,
-                content_id.title AS title,
-                content_id.content_type AS content_type,
-                count() AS shared_entity_count,
-                array::sort(array::group(entity_id.name)) AS shared_entities,
-                content_id.created_at AS created_at
-            FROM content_entity
-            WHERE entity_id IN $source_entities
-                AND content_id != $source_content_id
-                {recency_clause}
-            GROUP BY content_id, title, content_type, created_at
-            HAVING shared_entity_count >= 2
+                content_id,
+                title,
+                content_type,
+                shared_entity_count,
+                shared_entities,
+                created_at
+            FROM (
+                SELECT
+                    content_id AS content_id,
+                    content_id.title AS title,
+                    content_id.content_type AS content_type,
+                    count() AS shared_entity_count,
+                    array::sort(array::group(entity_id.name)) AS shared_entities,
+                    content_id.created_at AS created_at
+                FROM content_entity
+                WHERE entity_id IN $source_entities
+                    AND content_id != $source_content_id
+                    {recency_clause}
+                GROUP BY content_id, title, content_type, created_at
+            )
+            WHERE shared_entity_count >= 2
             ORDER BY shared_entity_count DESC, created_at DESC, content_id ASC
             LIMIT $limit
         """
