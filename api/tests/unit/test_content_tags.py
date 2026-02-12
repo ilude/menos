@@ -235,6 +235,8 @@ class TestContentUpdateEndpoint:
     @pytest.mark.asyncio
     async def test_update_content_not_found(self):
         """Test updating non-existent content returns 404."""
+        from fastapi import HTTPException
+
         from menos.routers.content import update_content
 
         mock_repo = MagicMock(spec=SurrealDBRepository)
@@ -244,15 +246,16 @@ class TestContentUpdateEndpoint:
 
         update_request = ContentUpdateRequest(tags=["new-tag"])
 
-        result = await update_content(
-            content_id="nonexistent",
-            update_request=update_request,
-            key_id="test-key",
-            surreal_repo=mock_repo,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await update_content(
+                content_id="nonexistent",
+                update_request=update_request,
+                key_id="test-key",
+                surreal_repo=mock_repo,
+            )
 
-        assert result[0]["error"] == "Content not found"
-        assert result[1] == 404
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Content not found"
 
     @pytest.mark.asyncio
     async def test_update_content_title_and_description(self):

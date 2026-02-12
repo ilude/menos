@@ -47,7 +47,11 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 
 ### Content
 - `GET /api/v1/content` — List content (`tags`, `content_type` query params)
-- `GET /api/v1/content/{id}` — Get content metadata
+- `GET /api/v1/content/stats` — Aggregate counts by processing status and content type
+- `GET /api/v1/content/{id}` — Enriched detail with pipeline results (summary, quality, topics, entities)
+- `GET /api/v1/content/{id}/download` — Raw file download from MinIO
+- `GET /api/v1/content/{id}/entities` — Linked entities with edge types and confidence
+- `GET /api/v1/content/{id}/chunks` — Text chunks (`?include_embeddings=true` for vectors)
 - `POST /api/v1/content` — Upload content (`tags` repeatable param; auto-extracts frontmatter + wiki-links)
 - `PATCH /api/v1/content/{id}` — Update metadata (tags, title, description)
 - `DELETE /api/v1/content/{id}` — Delete content and associated links
@@ -69,7 +73,8 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 
 ### YouTube
 - `POST /api/v1/youtube/ingest` — Ingest video by URL
-- `GET /api/v1/youtube/{video_id}` — Get video info
+- `GET /api/v1/youtube/{video_id}` — Full detail (transcript, pipeline results, YouTube metadata)
+- `GET /api/v1/youtube/{video_id}/transcript` — Raw transcript as text/plain
 - `GET /api/v1/youtube` — List videos (`channel_id` filter)
 - `GET /api/v1/youtube/channels` — List channels with counts
 

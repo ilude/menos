@@ -1,6 +1,6 @@
 ---
 created: 2026-02-11
-completed:
+completed: 2026-02-11
 ---
 
 # Team Plan: Video Access Tooling

@@ -4,7 +4,8 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from menos.auth.dependencies import AuthenticatedKeyId
@@ -97,6 +98,70 @@ class LinksListResponse(BaseModel):
     links: list[LinkResponse]
 
 
+class ContentDetailResponse(BaseModel):
+    """Detailed content response with pipeline results."""
+
+    id: str
+    content_type: str
+    title: str | None = None
+    description: str | None = None
+    mime_type: str
+    file_size: int
+    file_path: str
+    tags: list[str] = []
+    created_at: str | None = None
+    updated_at: str | None = None
+    processing_status: str | None = None
+    summary: str | None = None
+    quality_tier: str | None = None
+    quality_score: int | None = None
+    pipeline_tags: list[str] = []
+    topics: list[str] = []
+    entities: list[str] = []
+    metadata: dict | None = None
+
+
+class ContentStatsResponse(BaseModel):
+    """Aggregate content statistics."""
+
+    total: int
+    by_status: dict[str, int]
+    by_content_type: dict[str, int]
+
+
+class ContentEntityResponse(BaseModel):
+    """Entity linked to a content item."""
+
+    id: str
+    name: str
+    entity_type: str
+    edge_type: str
+    confidence: float | None = None
+
+
+class ContentEntitiesListResponse(BaseModel):
+    """List of entities for a content item."""
+
+    items: list[ContentEntityResponse]
+    total: int
+
+
+class ContentChunkResponse(BaseModel):
+    """A chunk belonging to a content item."""
+
+    id: str | None = None
+    chunk_index: int
+    text: str
+    embedding: list[float] | None = None
+
+
+class ContentChunksListResponse(BaseModel):
+    """List of chunks for a content item."""
+
+    items: list[ContentChunkResponse]
+    total: int
+
+
 @router.get("/tags", response_model=TagList)
 async def list_tags(
     key_id: AuthenticatedKeyId,
@@ -140,7 +205,17 @@ async def list_content(
     return ContentList(items=content_items, total=total, offset=offset, limit=limit)
 
 
-@router.get("/{content_id}")
+@router.get("/stats", response_model=ContentStatsResponse)
+async def get_content_stats(
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get aggregate content statistics."""
+    stats = await surreal_repo.get_content_stats()
+    return ContentStatsResponse(**stats)
+
+
+@router.get("/{content_id}", response_model=ContentDetailResponse)
 async def get_content(
     content_id: str,
     key_id: AuthenticatedKeyId,
@@ -149,15 +224,45 @@ async def get_content(
     """Get content metadata by ID."""
     metadata = await surreal_repo.get_content(content_id)
     if not metadata:
-        return {"error": "Content not found"}
+        raise HTTPException(status_code=404, detail="Content not found")
 
-    return {
-        "id": metadata.id,
-        "content_type": metadata.content_type,
-        "title": metadata.title,
-        "created_at": metadata.created_at.isoformat() if metadata.created_at else None,
-        "metadata": metadata.metadata,
-    }
+    # Extract pipeline results from unified_result
+    unified = (metadata.metadata or {}).get("unified_result") or {}
+
+    return ContentDetailResponse(
+        id=metadata.id or "",
+        content_type=metadata.content_type,
+        title=metadata.title,
+        description=metadata.description,
+        mime_type=metadata.mime_type,
+        file_size=metadata.file_size,
+        file_path=metadata.file_path,
+        tags=metadata.tags,
+        created_at=(
+            metadata.created_at.isoformat() if metadata.created_at else None
+        ),
+        updated_at=(
+            metadata.updated_at.isoformat() if metadata.updated_at else None
+        ),
+        processing_status=(metadata.metadata or {}).get(
+            "processing_status"
+        ),
+        summary=unified.get("summary") or None,
+        quality_tier=unified.get("tier") or None,
+        quality_score=unified.get("quality_score") or None,
+        pipeline_tags=unified.get("tags", []),
+        topics=[
+            t["name"]
+            for t in unified.get("topics", [])
+            if isinstance(t, dict)
+        ],
+        entities=[
+            e["name"]
+            for e in unified.get("additional_entities", [])
+            if isinstance(e, dict)
+        ],
+        metadata=metadata.metadata,
+    )
 
 
 @router.post("", response_model=ContentCreateResponse)
@@ -291,7 +396,7 @@ async def update_content(
     """Update content metadata by ID."""
     metadata = await surreal_repo.get_content(content_id)
     if not metadata:
-        return {"error": "Content not found"}, 404
+        raise HTTPException(status_code=404, detail="Content not found")
 
     # Apply updates to metadata
     if update_request.tags is not None:
@@ -326,7 +431,7 @@ async def delete_content(
     """Delete content by ID."""
     metadata = await surreal_repo.get_content(content_id)
     if not metadata:
-        return {"error": "Content not found"}
+        raise HTTPException(status_code=404, detail="Content not found")
 
     # Delete from MinIO
     await minio_storage.delete(metadata.file_path)
@@ -357,8 +462,6 @@ async def get_content_links(
     # Verify content exists
     content = await surreal_repo.get_content(content_id)
     if not content:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Content not found")
 
     # Get links
@@ -402,8 +505,6 @@ async def get_content_backlinks(
     # Verify content exists
     content = await surreal_repo.get_content(content_id)
     if not content:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Content not found")
 
     # Get backlinks
@@ -431,3 +532,82 @@ async def get_content_backlinks(
         )
 
     return LinksListResponse(links=link_responses)
+
+
+@router.get("/{content_id}/entities", response_model=ContentEntitiesListResponse)
+async def get_content_entities(
+    content_id: str,
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get entities linked to this content item."""
+    content = await surreal_repo.get_content(content_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    entities_with_edges = await surreal_repo.get_entities_for_content(content_id)
+
+    items = [
+        ContentEntityResponse(
+            id=entity.id or "",
+            name=entity.name,
+            entity_type=entity.entity_type.value,
+            edge_type=edge.edge_type.value,
+            confidence=edge.confidence,
+        )
+        for entity, edge in entities_with_edges
+    ]
+
+    return ContentEntitiesListResponse(items=items, total=len(items))
+
+
+@router.get("/{content_id}/chunks", response_model=ContentChunksListResponse)
+async def get_content_chunks(
+    content_id: str,
+    key_id: AuthenticatedKeyId,
+    include_embeddings: Annotated[bool, Query()] = False,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Get chunks for this content item."""
+    content = await surreal_repo.get_content(content_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    chunks = await surreal_repo.get_chunks(content_id)
+
+    items = [
+        ContentChunkResponse(
+            id=chunk.id,
+            chunk_index=chunk.chunk_index,
+            text=chunk.text,
+            embedding=chunk.embedding if include_embeddings else None,
+        )
+        for chunk in chunks
+    ]
+
+    return ContentChunksListResponse(items=items, total=len(items))
+
+
+@router.get("/{content_id}/download")
+async def download_content(
+    content_id: str,
+    key_id: AuthenticatedKeyId,
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+    minio_storage: MinIOStorage = Depends(get_minio_storage),
+):
+    """Download the original file for a content item."""
+    content = await surreal_repo.get_content(content_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="Content not found")
+
+    try:
+        data = await minio_storage.download(content.file_path)
+    except RuntimeError:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+
+    filename = content.file_path.rsplit("/", 1)[-1]
+    return Response(
+        content=data,
+        media_type=content.mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

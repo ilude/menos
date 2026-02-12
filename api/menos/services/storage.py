@@ -219,6 +219,35 @@ class SurrealDBRepository:
         items = [self._parse_content(item) for item in raw_items]
         return items, len(items)
 
+    async def get_content_stats(self) -> dict:
+        """Get aggregate content statistics."""
+        status_result = self.db.query(
+            "SELECT count() AS count, metadata.processing_status AS status "
+            "FROM content GROUP BY status"
+        )
+        status_rows = self._parse_query_result(status_result)
+
+        type_result = self.db.query(
+            "SELECT count() AS count, content_type FROM content GROUP BY content_type"
+        )
+        type_rows = self._parse_query_result(type_result)
+
+        total = sum(r.get("count", 0) for r in status_rows)
+        by_status = {
+            (r.get("status") or "none"): r.get("count", 0)
+            for r in status_rows
+        }
+        by_content_type = {
+            r.get("content_type", "unknown"): r.get("count", 0)
+            for r in type_rows
+        }
+
+        return {
+            "total": total,
+            "by_status": by_status,
+            "by_content_type": by_content_type,
+        }
+
     async def update_content(self, content_id: str, metadata: ContentMetadata) -> ContentMetadata:
         """Update content metadata.
 
