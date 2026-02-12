@@ -20,6 +20,23 @@ from menos.models import (
 from menos.services.normalization import normalize_name
 from menos.services.version_utils import has_version_drift, parse_version_tuple
 
+_TIER_ORDER = ["S", "A", "B", "C", "D"]
+
+
+def _compute_valid_tiers(tier_min: str | None) -> list[str]:
+    """Return tiers that are equal or better than tier_min.
+
+    Returns an empty list when tier_min is None or invalid.
+    """
+    if tier_min is None:
+        return []
+
+    normalized = tier_min.strip().upper()
+    if normalized not in _TIER_ORDER:
+        return []
+
+    return _TIER_ORDER[: _TIER_ORDER.index(normalized) + 1]
+
 
 class MinIOStorage:
     """MinIO client wrapper for file storage."""
@@ -195,7 +212,7 @@ class SurrealDBRepository:
             offset: Query offset
             limit: Query limit
             content_type: Optional filter by content type
-            tags: Optional filter by tags (must have all specified tags)
+            tags: Optional filter by tags (can have any specified tag)
 
         Returns:
             Tuple of (content list, total count)
@@ -207,7 +224,7 @@ class SurrealDBRepository:
             where_clauses.append("content_type = $content_type")
             params["content_type"] = content_type
         if tags:
-            where_clauses.append("tags CONTAINSALL $tags")
+            where_clauses.append("tags CONTAINSANY $tags")
             params["tags"] = tags
 
         where_clause = ""
@@ -485,7 +502,7 @@ class SurrealDBRepository:
         """Get graph data for visualization.
 
         Args:
-            tags: Optional filter by tags (must have all specified tags)
+            tags: Optional filter by tags (can have any specified tag)
             content_type: Optional filter by content type
             limit: Maximum number of nodes to return
 
@@ -499,7 +516,7 @@ class SurrealDBRepository:
             where_clauses.append("content_type = $content_type")
             params["content_type"] = content_type
         if tags:
-            where_clauses.append("tags CONTAINSALL $tags")
+            where_clauses.append("tags CONTAINSANY $tags")
             params["tags"] = tags
 
         where_clause = ""

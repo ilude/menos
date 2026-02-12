@@ -208,6 +208,7 @@ class TestAgenticSearchSuccess:
         mock_agent_service.search.assert_called_once_with(
             query="test query",
             content_type="youtube",
+            tier_min=None,
             limit=10,
         )
 
@@ -233,6 +234,7 @@ class TestAgenticSearchSuccess:
         mock_agent_service.search.assert_called_once_with(
             query="test query",
             content_type=None,
+            tier_min=None,
             limit=20,
         )
 
@@ -338,6 +340,7 @@ class TestAgenticSearchEdgeCases:
         mock_agent_service.search.assert_called_once_with(
             query="",
             content_type=None,
+            tier_min=None,
             limit=10,
         )
 
@@ -390,6 +393,7 @@ class TestAgenticSearchEdgeCases:
         mock_agent_service.search.assert_called_once_with(
             query="test",
             content_type=None,
+            tier_min=None,
             limit=100,
         )
 
@@ -412,6 +416,7 @@ class TestAgenticSearchEdgeCases:
         mock_agent_service.search.assert_called_once_with(
             query=special_query,
             content_type=None,
+            tier_min=None,
             limit=10,
         )
 

@@ -1,13 +1,13 @@
 """Search endpoints."""
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from menos.auth.dependencies import AuthenticatedKeyId
 from menos.services.agent import AgentService
 from menos.services.di import get_agent_service, get_surreal_repo
 from menos.services.embeddings import EmbeddingService, get_embedding_service
-from menos.services.storage import SurrealDBRepository
+from menos.services.storage import SurrealDBRepository, _compute_valid_tiers
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -18,10 +18,25 @@ class SearchQuery(BaseModel):
     query: str
     content_type: str | None = None
     tags: list[str] | None = None
+    tier_min: str | None = None
     entities: list[str] | None = None  # Entity IDs to filter by
     entity_types: list[str] | None = None  # Filter by entity type
     topics: list[str] | None = None  # Filter by topic hierarchy (e.g., "AI > LLMs")
     limit: int = 20
+
+    @field_validator("tier_min", mode="before")
+    @classmethod
+    def validate_tier_min(cls, value: str | None) -> str | None:
+        """Validate and normalize optional minimum quality tier."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("tier_min must be one of S, A, B, C, D")
+
+        normalized = value.strip().upper()
+        if normalized not in {"S", "A", "B", "C", "D"}:
+            raise ValueError("tier_min must be one of S, A, B, C, D")
+        return normalized
 
 
 class SearchResult(BaseModel):
@@ -47,7 +62,22 @@ class AgenticSearchQuery(BaseModel):
 
     query: str
     content_type: str | None = None
+    tier_min: str | None = None
     limit: int = 10
+
+    @field_validator("tier_min", mode="before")
+    @classmethod
+    def validate_tier_min(cls, value: str | None) -> str | None:
+        """Validate and normalize optional minimum quality tier."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("tier_min must be one of S, A, B, C, D")
+
+        normalized = value.strip().upper()
+        if normalized not in {"S", "A", "B", "C", "D"}:
+            raise ValueError("tier_min must be one of S, A, B, C, D")
+        return normalized
 
 
 class SourceReference(BaseModel):
@@ -90,7 +120,8 @@ async def vector_search(
 
     Supports filtering by:
     - content_type: Type of content (youtube, markdown, etc.)
-    - tags: Content must have ALL specified tags
+    - tags: Content can have ANY of the specified tags
+    - tier_min: Minimum quality tier (S, A, B, C, D)
     - entities: Content must be linked to ALL specified entity IDs
     - entity_types: Content must have entities of specified types
     - topics: Content must discuss topics matching the hierarchy pattern
@@ -105,8 +136,17 @@ async def vector_search(
     params = {"embedding": query_embedding, "limit": body.limit}
 
     if body.tags:
-        where_clause += " AND content_id.tags CONTAINSALL $tags"
+        where_clause += " AND content_id.tags CONTAINSANY $tags"
         params["tags"] = body.tags
+
+    if body.content_type:
+        where_clause += " AND content_id.content_type = $content_type"
+        params["content_type"] = body.content_type
+
+    valid_tiers = _compute_valid_tiers(body.tier_min)
+    if valid_tiers:
+        where_clause += " AND content_id.tier IN $valid_tiers"
+        params["valid_tiers"] = valid_tiers
 
     # Native SurrealDB vector search with cosine similarity
     search_results = surreal_repo.db.query(
@@ -325,6 +365,7 @@ async def agentic_search(
     result = await agent_service.search(
         query=body.query,
         content_type=body.content_type,
+        tier_min=body.tier_min,
         limit=body.limit,
     )
 

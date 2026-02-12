@@ -21,6 +21,7 @@ paths:
 | file_path | str | MinIO path |
 | author | str\|None | |
 | tags | list[str] | default `[]` |
+| tier | str\|None | Quality tier: `S`, `A`, `B`, `C`, `D` |
 | created_at | datetime\|None | UTC |
 | updated_at | datetime\|None | UTC |
 | metadata | dict | varies by content_type |

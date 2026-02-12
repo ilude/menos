@@ -34,6 +34,7 @@ class TestJobIdCorrelation:
         llm.generate = AsyncMock(
             return_value='{"tier": "B", "quality_score": 50, "tags": ["test"]}'
         )
+        llm.with_context = MagicMock(return_value=llm)
         llm.model = "test-model"
         repo = MagicMock()
         repo.list_tags_with_counts = AsyncMock(return_value=[{"name": "existing"}])

@@ -55,6 +55,7 @@ def mock_llm_provider(valid_llm_response):
     provider = MagicMock()
     provider.model = "test-model"
     provider.generate = AsyncMock(return_value=valid_llm_response)
+    provider.with_context = MagicMock(return_value=provider)
     return provider
 
 
@@ -394,6 +395,7 @@ class TestShortContentProcessing:
         llm.generate = AsyncMock(
             return_value='{"tier": "B", "quality_score": 50, "tags": ["test"], "summary": "Short."}'
         )
+        llm.with_context = MagicMock(return_value=llm)
         llm.model = "test-model"
 
         repo = MagicMock()

@@ -177,9 +177,7 @@ class TestAgentService:
         assert "query1" in queries
 
     @pytest.mark.asyncio
-    async def test_expand_query_invalid_json_fallback(
-        self, agent_service, mock_expansion_provider
-    ):
+    async def test_expand_query_invalid_json_fallback(self, agent_service, mock_expansion_provider):
         """Test fallback to [query] on invalid JSON."""
         mock_expansion_provider.generate.return_value = "This is not JSON"
 
@@ -221,9 +219,7 @@ class TestAgentService:
         assert queries == ["test"]
 
     @pytest.mark.asyncio
-    async def test_expand_query_limits_to_5_queries(
-        self, agent_service, mock_expansion_provider
-    ):
+    async def test_expand_query_limits_to_5_queries(self, agent_service, mock_expansion_provider):
         """Test query expansion limits to 5 queries max."""
         mock_expansion_provider.generate.return_value = json.dumps(
             {
@@ -300,9 +296,7 @@ class TestAgentService:
         assert results[0]["score"] == 0.85  # Higher score kept
 
     @pytest.mark.asyncio
-    async def test_vector_search_with_content_type_filter(
-        self, agent_service, mock_surreal_repo
-    ):
+    async def test_vector_search_with_content_type_filter(self, agent_service, mock_surreal_repo):
         """Test vector search includes content type filter in query."""
         mock_surreal_repo.db.query.side_effect = [
             [{"result": []}],  # Empty chunk results
@@ -365,7 +359,7 @@ class TestAgentService:
         ]
 
         queries = ["query1", "query2"]
-        results = await agent_service._search_with_rrf(queries, None, limit=10)
+        results = await agent_service._search_with_rrf(queries, None, None, limit=10)
 
         # Result B should rank highest (appeared in both queries)
         assert len(results) == 3  # A, B, C
@@ -413,9 +407,7 @@ class TestAgentService:
         assert answer == ""
 
     @pytest.mark.asyncio
-    async def test_synthesis_runtime_error_fallback(
-        self, agent_service, mock_synthesis_provider
-    ):
+    async def test_synthesis_runtime_error_fallback(self, agent_service, mock_synthesis_provider):
         """Test synthesis returns empty string on RuntimeError."""
         mock_synthesis_provider.generate.side_effect = RuntimeError("LLM failed")
 
@@ -425,9 +417,7 @@ class TestAgentService:
         assert answer == ""
 
     @pytest.mark.asyncio
-    async def test_synthesis_truncates_long_snippets(
-        self, agent_service, mock_synthesis_provider
-    ):
+    async def test_synthesis_truncates_long_snippets(self, agent_service, mock_synthesis_provider):
         """Test synthesis truncates snippets to 400 characters."""
         long_snippet = "x" * 500
         results = [
@@ -443,9 +433,7 @@ class TestAgentService:
         assert "x" * 500 not in prompt
 
     @pytest.mark.asyncio
-    async def test_synthesis_handles_untitled_content(
-        self, agent_service, mock_synthesis_provider
-    ):
+    async def test_synthesis_handles_untitled_content(self, agent_service, mock_synthesis_provider):
         """Test synthesis uses 'Untitled' for missing titles."""
         results = [
             {"id": "1", "title": None, "snippet": "Test snippet", "score": 0.9},
@@ -462,9 +450,7 @@ class TestAgentService:
         """Test complete search flow with all stages."""
         # Create mocks
         mock_expansion = AsyncMock()
-        mock_expansion.generate = AsyncMock(
-            return_value=json.dumps({"queries": ["test query"]})
-        )
+        mock_expansion.generate = AsyncMock(return_value=json.dumps({"queries": ["test query"]}))
 
         mock_synthesis = AsyncMock()
         mock_synthesis.generate = AsyncMock(
@@ -515,9 +501,7 @@ class TestAgentService:
         assert result.timing["total_ms"] > 0
 
     @pytest.mark.asyncio
-    async def test_full_pipeline_with_content_type_filter(
-        self, agent_service, mock_surreal_repo
-    ):
+    async def test_full_pipeline_with_content_type_filter(self, agent_service, mock_surreal_repo):
         """Test search pipeline with content type filter."""
         # Expansion returns both original + "default query" = 2 queries
         # Each query needs: chunks + metadata = 2 calls
@@ -534,6 +518,34 @@ class TestAgentService:
         # Verify content type filter was applied
         query_calls = [call[0][0] for call in mock_surreal_repo.db.query.call_args_list]
         assert any("content_type = 'video'" in query for query in query_calls)
+
+    @pytest.mark.asyncio
+    async def test_vector_search_with_tier_filter(self, agent_service, mock_surreal_repo):
+        """Test vector search includes tier filter in query params."""
+        mock_surreal_repo.db.query.side_effect = [
+            [{"result": []}],
+            [{"result": []}],
+        ]
+
+        await agent_service._vector_search([0.1] * 1024, limit=10, tier_min="b")
+
+        query_call = mock_surreal_repo.db.query.call_args_list[0]
+        query_str = query_call[0][0]
+        params = query_call[0][1]
+        assert "content_id.tier IN $valid_tiers" in query_str
+        assert params["valid_tiers"] == ["S", "A", "B"]
+
+    @pytest.mark.asyncio
+    async def test_search_propagates_tier_min_to_all_subqueries(self, agent_service):
+        """Test tier_min is propagated through all vector subqueries."""
+        agent_service._expand_query = AsyncMock(return_value=["q1", "q2", "q3"])
+        agent_service._vector_search = AsyncMock(return_value=[])
+
+        await agent_service.search("test", tier_min="A", limit=5)
+
+        assert agent_service._vector_search.call_count == 3
+        for call in agent_service._vector_search.call_args_list:
+            assert call.args[3] == "A"
 
     @pytest.mark.asyncio
     async def test_reranking_reorders_results(self, agent_service, mock_reranker):

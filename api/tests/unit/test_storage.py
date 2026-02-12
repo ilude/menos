@@ -15,7 +15,23 @@ from menos.models import (
     EntityType,
     LinkModel,
 )
-from menos.services.storage import MinIOStorage, SurrealDBRepository
+from menos.services.storage import MinIOStorage, SurrealDBRepository, _compute_valid_tiers
+
+
+class TestComputeValidTiers:
+    """Tests for tier helper used by search filters."""
+
+    def test_compute_valid_tiers_for_all_levels(self):
+        assert _compute_valid_tiers("S") == ["S"]
+        assert _compute_valid_tiers("A") == ["S", "A"]
+        assert _compute_valid_tiers("B") == ["S", "A", "B"]
+        assert _compute_valid_tiers("C") == ["S", "A", "B", "C"]
+        assert _compute_valid_tiers("D") == ["S", "A", "B", "C", "D"]
+
+    def test_compute_valid_tiers_handles_none_and_invalid(self):
+        assert _compute_valid_tiers(None) == []
+        assert _compute_valid_tiers("X") == []
+        assert _compute_valid_tiers(" b ") == ["S", "A", "B"]
 
 
 class TestMinIOStorage:
@@ -632,7 +648,7 @@ class TestListContentFilters:
 
         assert len(items) == 0
         call_args = mock_db.query.call_args
-        assert "tags CONTAINSALL $tags" in call_args[0][0]
+        assert "tags CONTAINSANY $tags" in call_args[0][0]
         assert call_args[0][1]["tags"] == ["python", "api"]
 
     @pytest.mark.asyncio
@@ -1685,7 +1701,7 @@ class TestGetGraphData:
         assert edges == []
         call_args = mock_db.query.call_args[0]
         assert "content_type = $content_type" in call_args[0]
-        assert "tags CONTAINSALL $tags" in call_args[0]
+        assert "tags CONTAINSANY $tags" in call_args[0]
 
     @pytest.mark.asyncio
     async def test_graph_data_filters_edges_to_node_set(self):

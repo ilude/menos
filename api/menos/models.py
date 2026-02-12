@@ -95,6 +95,7 @@ class ContentMetadata(BaseModel):
     file_path: str
     author: str | None = None
     tags: list[str] = Field(default_factory=list)
+    tier: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

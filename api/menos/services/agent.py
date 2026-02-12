@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from menos.services.embeddings import EmbeddingService
 from menos.services.llm import LLMProvider
 from menos.services.reranker import RerankerProvider
-from menos.services.storage import SurrealDBRepository
+from menos.services.storage import SurrealDBRepository, _compute_valid_tiers
 
 EXPANSION_PROMPT = """Generate 3-5 diverse search queries to find relevant content.
 Return JSON: {{"queries": ["query1", "query2", ...]}}
@@ -84,6 +84,7 @@ class AgentService:
         self,
         query: str,
         content_type: str | None = None,
+        tier_min: str | None = None,
         limit: int = 10,
     ) -> AgentSearchResult:
         """Execute 3-stage agentic search pipeline.
@@ -91,6 +92,7 @@ class AgentService:
         Args:
             query: User's search query
             content_type: Optional filter by content type
+            tier_min: Optional minimum quality tier (S/A/B/C/D)
             limit: Maximum number of results to return
 
         Returns:
@@ -106,7 +108,12 @@ class AgentService:
 
         # Stage 2: Multi-Query Search with RRF
         retrieval_start = time.perf_counter()
-        search_results = await self._search_with_rrf(expanded_queries, content_type, limit * 2)
+        search_results = await self._search_with_rrf(
+            expanded_queries,
+            content_type,
+            tier_min,
+            limit * 2,
+        )
         timing["retrieval_ms"] = (time.perf_counter() - retrieval_start) * 1000
 
         # Stage 3a: Reranking
@@ -180,6 +187,7 @@ class AgentService:
         embedding: list[float],
         limit: int,
         content_type: str | None = None,
+        tier_min: str | None = None,
     ) -> list[dict]:
         """Execute vector search in SurrealDB.
 
@@ -187,6 +195,7 @@ class AgentService:
             embedding: Query embedding vector
             limit: Maximum results to return
             content_type: Optional content type filter
+            tier_min: Optional minimum quality tier (S/A/B/C/D)
 
         Returns:
             List of search results with id, content_type, title, score, snippet
@@ -199,6 +208,15 @@ class AgentService:
                 f"(SELECT VALUE id FROM content WHERE content_type = '{content_type}')"
             )
 
+        valid_tiers = _compute_valid_tiers(tier_min)
+        tier_filter = ""
+        if valid_tiers:
+            tier_filter = " AND content_id.tier IN $valid_tiers"
+
+        query_params = {"embedding": embedding, "limit": limit}
+        if valid_tiers:
+            query_params["valid_tiers"] = valid_tiers
+
         # Execute vector search
         search_results = self.surreal_repo.db.query(
             f"""
@@ -208,10 +226,11 @@ class AgentService:
             WHERE embedding != NONE
                 AND vector::similarity::cosine(embedding, $embedding) > 0.3
                 {type_filter}
+                {tier_filter}
             ORDER BY score DESC
             LIMIT $limit
             """,
-            {"embedding": embedding, "limit": limit},
+            query_params,
         )
 
         # Parse results
@@ -280,6 +299,7 @@ class AgentService:
         self,
         queries: list[str],
         content_type: str | None,
+        tier_min: str | None,
         limit: int,
     ) -> list[dict]:
         """Execute multi-query search with Reciprocal Rank Fusion.
@@ -287,6 +307,7 @@ class AgentService:
         Args:
             queries: List of search queries
             content_type: Optional content type filter
+            tier_min: Optional minimum quality tier (S/A/B/C/D)
             limit: Maximum results to return
 
         Returns:
@@ -299,7 +320,7 @@ class AgentService:
         for query in queries:
             # Generate embedding for this query
             embedding = await self.embedding_service.embed_query(query)
-            results = await self._vector_search(embedding, limit, content_type)
+            results = await self._vector_search(embedding, limit, content_type, tier_min)
 
             # Apply RRF scoring
             for rank, result in enumerate(results):
