@@ -92,8 +92,8 @@ def build_openrouter_chain(model: str = "") -> LLMProvider:
     """Build an OpenRouter provider with fallback chain.
 
     If model is specified, returns a plain OpenRouterProvider for that model.
-    If model is empty, returns a FallbackProvider with pony-alpha as primary,
-    then aurora-alpha, GPT-OSS 120B, DeepSeek R1, then Gemma 3 27B.
+    If model is empty, returns a FallbackProvider with aurora-alpha as primary,
+    then GPT-OSS 120B, DeepSeek R1, then Gemma 3 27B.
 
     Args:
         model: Specific model to use, or empty for fallback chain
@@ -109,7 +109,6 @@ def build_openrouter_chain(model: str = "") -> LLMProvider:
         return OpenRouterProvider(key, model)
 
     chain = [
-        ("pony", OpenRouterProvider(key, "openrouter/pony-alpha")),
         ("aurora", OpenRouterProvider(key, "openrouter/aurora-alpha")),
         ("gpt-oss", OpenRouterProvider(key, "openai/gpt-oss-120b:free")),
         ("deepseek", OpenRouterProvider(key, "deepseek/deepseek-r1-0528:free")),

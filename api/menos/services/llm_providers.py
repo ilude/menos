@@ -364,6 +364,10 @@ class FallbackProvider:
                     temperature=temperature,
                     timeout=timeout,
                 )
+                if not result or not result.strip():
+                    logger.warning("FallbackProvider: '%s' returned empty response", name)
+                    errors.append((name, RuntimeError("Empty response")))
+                    continue
                 return result
             except Exception as exc:
                 logger.warning("FallbackProvider: '%s' failed: %s", name, exc)
