@@ -29,10 +29,7 @@ def smoke_request_signer():
     Uses SMOKE_TEST_KEY_FILE env var, defaults to ~/.ssh/id_ed25519
     Gracefully handles missing key file with informative error.
     """
-    key_path = os.environ.get(
-        "SMOKE_TEST_KEY_FILE",
-        str(Path.home() / ".ssh" / "id_ed25519")
-    )
+    key_path = os.environ.get("SMOKE_TEST_KEY_FILE", str(Path.home() / ".ssh" / "id_ed25519"))
     key_path = Path(key_path)
 
     if not key_path.exists():
@@ -64,6 +61,7 @@ def smoke_authed_headers(smoke_request_signer):
     Usage:
         headers = smoke_authed_headers("GET", "/api/endpoint", host="example.com")
     """
+
     def _make_headers(
         method: str,
         path: str,
@@ -81,12 +79,7 @@ def smoke_authed_headers(smoke_request_signer):
         Returns:
             Dictionary of signed headers ready to send with request
         """
-        return smoke_request_signer.sign_request(
-            method,
-            path,
-            body=body,
-            host=host or "localhost"
-        )
+        return smoke_request_signer.sign_request(method, path, body=body, host=host or "localhost")
 
     return _make_headers
 
@@ -128,9 +121,7 @@ def smoke_first_content_id(smoke_authed_get):
         pytest.skip: If no content items exist
     """
     response = smoke_authed_get("/api/v1/content?limit=1")
-    assert response.status_code == 200, (
-        f"Failed to fetch content: {response.status_code}"
-    )
+    assert response.status_code == 200, f"Failed to fetch content: {response.status_code}"
 
     data = response.json()
     items = data.get("items", [])
@@ -152,9 +143,7 @@ def smoke_first_youtube_video_id(smoke_authed_get):
         pytest.skip: If no YouTube videos exist
     """
     response = smoke_authed_get("/api/v1/youtube")
-    assert response.status_code == 200, (
-        f"Failed to fetch YouTube videos: {response.status_code}"
-    )
+    assert response.status_code == 200, f"Failed to fetch YouTube videos: {response.status_code}"
 
     videos = response.json()
 
@@ -175,9 +164,7 @@ def smoke_first_entity_id(smoke_authed_get):
         pytest.skip: If no entities exist
     """
     response = smoke_authed_get("/api/v1/entities?limit=1")
-    assert response.status_code == 200, (
-        f"Failed to fetch entities: {response.status_code}"
-    )
+    assert response.status_code == 200, f"Failed to fetch entities: {response.status_code}"
 
     data = response.json()
     items = data.get("items", [])
@@ -212,11 +199,18 @@ def surreal_db(smoke_base_url):
 def minio_client():
     """Direct MinIO client using settings from .env."""
     try:
+        raw_endpoint = settings.minio_url.strip()
+        parsed = urlparse(raw_endpoint if "://" in raw_endpoint else f"http://{raw_endpoint}")
+        endpoint = parsed.netloc or parsed.path
+        secure = settings.minio_secure
+        if parsed.scheme in {"http", "https"}:
+            secure = parsed.scheme == "https"
+
         client = Minio(
-            settings.minio_url,
+            endpoint,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
+            secure=secure,
         )
         client.list_buckets()  # test connectivity
         return client
@@ -226,7 +220,4 @@ def minio_client():
 
 def pytest_configure(config):
     """Register custom markers for smoke tests."""
-    config.addinivalue_line(
-        "markers",
-        "smoke: mark test as smoke test (requires live API)"
-    )
+    config.addinivalue_line("markers", "smoke: mark test as smoke test (requires live API)")
