@@ -222,8 +222,9 @@ class TestLLMFailure:
         assert exc_info.value.code == "LLM_CALL_ERROR"
 
     @pytest.mark.asyncio
-    async def test_invalid_json_raises_stage_error(self, pipeline_service, mock_llm_provider):
-        mock_llm_provider.generate = AsyncMock(return_value="not json at all }{")
+    async def test_invalid_json_raises_after_retry(self, pipeline_service, mock_llm_provider):
+        # Both initial and retry return non-JSON → EMPTY_RESPONSE
+        mock_llm_provider.generate = AsyncMock(return_value="not json at all")
         with pytest.raises(PipelineStageError) as exc_info:
             await pipeline_service.process(
                 content_id="test-1",
@@ -234,6 +235,46 @@ class TestLLMFailure:
             )
         assert exc_info.value.stage == "parse"
         assert exc_info.value.code == "EMPTY_RESPONSE"
+        # Verify retry was attempted (2 calls: initial + correction)
+        assert mock_llm_provider.generate.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_with_valid_json(
+        self, pipeline_service, mock_llm_provider, valid_llm_response
+    ):
+        # First call returns markdown, retry returns valid JSON
+        mock_llm_provider.generate = AsyncMock(
+            side_effect=["**Tags**: python, docker", valid_llm_response]
+        )
+        result = await pipeline_service.process(
+            content_id="test-1",
+            content_text="x" * 1000,
+            content_type="youtube",
+            title="Test",
+            job_id="test-job",
+        )
+        assert result is not None
+        assert "programming" in result.tags
+        assert mock_llm_provider.generate.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_think_block_response_parsed_without_retry(
+        self, pipeline_service, mock_llm_provider, valid_llm_response
+    ):
+        # Think block wrapping valid JSON should parse on first try
+        response_with_think = f"<think>\nAnalyzing content...\n</think>\n{valid_llm_response}"
+        mock_llm_provider.generate = AsyncMock(return_value=response_with_think)
+        result = await pipeline_service.process(
+            content_id="test-1",
+            content_text="x" * 1000,
+            content_type="youtube",
+            title="Test",
+            job_id="test-job",
+        )
+        assert result is not None
+        assert result.tier == "A"
+        # No retry needed — parsed on first try
+        assert mock_llm_provider.generate.await_count == 1
 
 
 class TestContentTruncation:

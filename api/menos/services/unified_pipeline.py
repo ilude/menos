@@ -589,9 +589,33 @@ class UnifiedPipelineService:
             token_estimate,
         )
 
-        # Parse response
+        # Parse response (with one retry if JSON extraction fails)
         t0 = time.monotonic()
         data = extract_json(response)
+        if not data:
+            logger.warning(
+                "stage.parse.retry job_id=%s content_id=%s raw_len=%d",
+                job_id,
+                content_id,
+                len(response),
+            )
+            correction_prompt = (
+                "Your previous response was not valid JSON. "
+                "Convert the following content into the exact JSON format requested. "
+                "Respond ONLY with valid JSON, no markdown, no explanation.\n\n"
+                f"{response[:3000]}"
+            )
+            try:
+                retry_response = await llm_provider.generate(
+                    correction_prompt,
+                    temperature=0.1,
+                    max_tokens=3000,
+                    timeout=60.0,
+                )
+                data = extract_json(retry_response)
+            except Exception:
+                pass
+
         if not data:
             raise PipelineStageError(
                 "parse",
