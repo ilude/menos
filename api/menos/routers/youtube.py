@@ -23,6 +23,8 @@ class YouTubeVideoInfo(BaseModel):
     title: str | None
     transcript_preview: str
     chunk_count: int
+    created_at: str | None = None
+    published_at: str | None = None
 
 
 class YouTubeVideoDetail(BaseModel):
@@ -224,17 +226,23 @@ async def list_videos(
     Returns:
         List of YouTube videos, optionally filtered by channel
     """
-    items, _ = await surreal_repo.list_content(content_type="youtube", limit=limit)
+    items, _ = await surreal_repo.list_content(
+        content_type="youtube", limit=limit, order_by="created_at DESC",
+    )
 
     videos = []
     for item in items:
-        video_id = item.metadata.get("video_id", "") if item.metadata else ""
-        item_channel_id = item.metadata.get("channel_id") if item.metadata else None
+        meta = item.metadata or {}
+        video_id = meta.get("video_id", "")
+        item_channel_id = meta.get("channel_id")
 
         if channel_id and item_channel_id != channel_id:
             continue
 
         chunks = await surreal_repo.get_chunks(item.id or "")
+
+        created_at = item.created_at.isoformat() if item.created_at else None
+        published_at = meta.get("published_at")
 
         videos.append(
             YouTubeVideoInfo(
@@ -243,6 +251,8 @@ async def list_videos(
                 title=item.title,
                 transcript_preview="",
                 chunk_count=len(chunks),
+                created_at=created_at,
+                published_at=published_at,
             )
         )
 

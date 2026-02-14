@@ -205,6 +205,7 @@ class SurrealDBRepository:
         limit: int = 50,
         content_type: str | None = None,
         tags: list[str] | None = None,
+        order_by: str | None = None,
     ) -> tuple[list[ContentMetadata], int]:
         """List content metadata.
 
@@ -213,6 +214,7 @@ class SurrealDBRepository:
             limit: Query limit
             content_type: Optional filter by content type
             tags: Optional filter by tags (can have any specified tag)
+            order_by: Optional ORDER BY clause (e.g. "created_at DESC")
 
         Returns:
             Tuple of (content list, total count)
@@ -231,8 +233,13 @@ class SurrealDBRepository:
         if where_clauses:
             where_clause = " WHERE " + " AND ".join(where_clauses)
 
+        order_clause = ""
+        if order_by:
+            order_clause = f" ORDER BY {order_by}"
+
         result = self.db.query(
-            f"SELECT * FROM content{where_clause} LIMIT $limit START $offset",
+            f"SELECT * FROM content{where_clause}{order_clause}"
+            " LIMIT $limit START $offset",
             params,
         )
         raw_items = self._parse_query_result(result)
