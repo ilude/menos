@@ -476,7 +476,7 @@ class SurrealDBRepository:
     async def get_tag_aliases(self, limit: int = 50) -> dict[str, str]:
         """Get most common variant->canonical tag mappings."""
         result = self.db.query(
-            "SELECT variant, canonical FROM tag_alias "
+            "SELECT variant, canonical, usage_count, updated_at FROM tag_alias "
             "ORDER BY usage_count DESC, updated_at DESC LIMIT $limit",
             {"limit": limit},
         )
