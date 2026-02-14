@@ -15,6 +15,7 @@ class TestYouTubeIngestPipelineIntegration:
         authed_client,
         mock_surreal_repo,
         mock_youtube_service,
+        mock_metadata_service,
         mock_minio_storage,
         mock_pipeline_orchestrator,
     ):
@@ -29,6 +30,7 @@ class TestYouTubeIngestPipelineIntegration:
         mock_transcript.timestamped_text = "[00:00] Deep dive into RAG pipelines"
         mock_youtube_service.extract_video_id.return_value = "integration_vid"
         mock_youtube_service.fetch_transcript.return_value = mock_transcript
+        mock_metadata_service.fetch_metadata.side_effect = ValueError("No API key")
 
         created_content = ContentMetadata(
             id="int_content1",

@@ -9,6 +9,7 @@ from menos.routers.ingest import canonicalize_web_url
 from menos.services.docling import DoclingResult
 from menos.services.url_detector import DetectedURL
 from menos.services.youtube import TranscriptSegment, YouTubeTranscript
+from menos.services.youtube_metadata import YouTubeMetadata
 
 
 def _youtube_transcript() -> YouTubeTranscript:
@@ -19,34 +20,116 @@ def _youtube_transcript() -> YouTubeTranscript:
     )
 
 
-def test_ingest_routes_youtube_urls_to_youtube_flow(
+def _youtube_metadata() -> YouTubeMetadata:
+    return YouTubeMetadata(
+        video_id="dQw4w9WgXcQ",
+        title="Rick Astley - Never Gonna Give You Up",
+        description="The official video",
+        description_urls=["https://example.com"],
+        channel_id="UCuAXFkgsw1L7xaCfnd5JJOw",
+        channel_title="Rick Astley",
+        published_at="2009-10-25T06:57:33Z",
+        duration="PT3M33S",
+        duration_seconds=213,
+        duration_formatted="3:33",
+        view_count=1500000000,
+        like_count=15000000,
+        comment_count=3000000,
+        tags=["rick astley", "never gonna give you up"],
+        category_id="10",
+        thumbnails={},
+        fetched_at="2026-02-14T12:00:00",
+    )
+
+
+def test_ingest_youtube_fetches_metadata_and_stores_rich_fields(
     authed_client,
     mock_surreal_repo,
     mock_youtube_service,
+    mock_metadata_service,
+    mock_minio_storage,
     mock_docling_client,
     mock_pipeline_orchestrator,
 ):
+    yt_meta = _youtube_metadata()
     mock_youtube_service.fetch_transcript.return_value = _youtube_transcript()
+    mock_metadata_service.fetch_metadata.return_value = yt_meta
     mock_surreal_repo.create_content.return_value = ContentMetadata(
         id="content-y1",
         content_type="youtube",
-        title="YouTube: dQw4w9WgXcQ",
+        title=yt_meta.title,
         mime_type="text/plain",
         file_size=100,
         file_path="youtube/dQw4w9WgXcQ/transcript.txt",
     )
     mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-y1"))
 
-    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "content_id": "content-y1",
-        "content_type": "youtube",
-        "title": "YouTube: dQw4w9WgXcQ",
-        "job_id": "job-y1",
-    }
+    data = response.json()
+    assert data["title"] == "Rick Astley - Never Gonna Give You Up"
+    assert data["job_id"] == "job-y1"
+
+    # Verify metadata was fetched
+    mock_metadata_service.fetch_metadata.assert_called_once_with("dQw4w9WgXcQ")
+
+    # Verify create_content was called with rich metadata
+    call_args = mock_surreal_repo.create_content.await_args[0][0]
+    assert call_args.metadata["published_at"] == "2009-10-25T06:57:33Z"
+    assert call_args.metadata["channel_id"] == "UCuAXFkgsw1L7xaCfnd5JJOw"
+    assert call_args.metadata["channel_title"] == "Rick Astley"
+    assert call_args.metadata["duration_seconds"] == 213
+    assert call_args.metadata["view_count"] == 1500000000
+    assert call_args.tags == ["rick astley", "never gonna give you up"]
+
+    # Verify metadata.json was uploaded to MinIO (2 uploads: transcript + metadata.json)
+    assert mock_minio_storage.upload.await_count == 2
+    metadata_upload = mock_minio_storage.upload.await_args_list[1]
+    assert metadata_upload.args[0] == "youtube/dQw4w9WgXcQ/metadata.json"
+
+    # Docling should not be called
     assert mock_docling_client.extract_markdown.await_count == 0
+
+
+def test_ingest_youtube_gracefully_handles_metadata_failure(
+    authed_client,
+    mock_surreal_repo,
+    mock_youtube_service,
+    mock_metadata_service,
+    mock_minio_storage,
+    mock_pipeline_orchestrator,
+):
+    mock_youtube_service.fetch_transcript.return_value = _youtube_transcript()
+    mock_metadata_service.fetch_metadata.side_effect = ValueError(
+        "YouTube API key not configured"
+    )
+    mock_surreal_repo.create_content.return_value = ContentMetadata(
+        id="content-y2",
+        content_type="youtube",
+        title="YouTube: dQw4w9WgXcQ",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+    )
+    mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-y2"))
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "YouTube: dQw4w9WgXcQ"
+    assert data["job_id"] == "job-y2"
+
+    # Verify fallback metadata has None fields
+    call_args = mock_surreal_repo.create_content.await_args[0][0]
+    assert call_args.metadata["published_at"] is None
+    assert call_args.metadata["channel_id"] is None
+    assert call_args.tags == []
 
 
 def test_ingest_routes_web_urls_to_docling_flow(
@@ -108,9 +191,13 @@ def test_ingest_unknown_classification_falls_back_to_docling(
 
     with patch(
         "menos.routers.ingest.URLDetector.classify_url",
-        return_value=DetectedURL(url="https://example.com", url_type="unknown", extracted_id=""),
+        return_value=DetectedURL(
+            url="https://example.com", url_type="unknown", extracted_id=""
+        ),
     ):
-        response = authed_client.post("/api/v1/ingest", json={"url": "https://example.com"})
+        response = authed_client.post(
+            "/api/v1/ingest", json={"url": "https://example.com"}
+        )
 
     assert response.status_code == 200
     assert response.json()["content_type"] == "web"
@@ -134,7 +221,9 @@ def test_ingest_dedupe_returns_existing_content_and_no_enqueue(
         )
     )
 
-    response = authed_client.post("/api/v1/ingest", json={"url": "https://example.com/path"})
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://example.com/path"}
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -155,7 +244,9 @@ def test_ingest_returns_docling_errors(
         side_effect=HTTPException(status_code=503, detail="Docling service unavailable")
     )
 
-    response = authed_client.post("/api/v1/ingest", json={"url": "https://example.com/fail"})
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://example.com/fail"}
+    )
 
     assert response.status_code == 503
 

@@ -2,6 +2,8 @@
 
 import hashlib
 import io
+import json
+import logging
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends
@@ -21,6 +23,12 @@ from menos.services.resource_key import generate_resource_key
 from menos.services.storage import MinIOStorage, SurrealDBRepository
 from menos.services.url_detector import URLDetector
 from menos.services.youtube import YouTubeService, get_youtube_service
+from menos.services.youtube_metadata import (
+    YouTubeMetadataService,
+    get_youtube_metadata_service,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -56,6 +64,7 @@ async def ingest_url(
     key_id: AuthenticatedKeyId,
     docling_client: DoclingClient = Depends(get_docling_client),
     youtube_service: YouTubeService = Depends(get_youtube_service),
+    metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
     orchestrator: PipelineOrchestrator = Depends(get_pipeline_orchestrator),
@@ -70,6 +79,7 @@ async def ingest_url(
             url=raw_url,
             key_id=key_id,
             youtube_service=youtube_service,
+            metadata_service=metadata_service,
             minio_storage=minio_storage,
             surreal_repo=surreal_repo,
             orchestrator=orchestrator,
@@ -90,6 +100,7 @@ async def _ingest_youtube(
     url: str,
     key_id: str,
     youtube_service: YouTubeService,
+    metadata_service: YouTubeMetadataService,
     minio_storage: MinIOStorage,
     surreal_repo: SurrealDBRepository,
     orchestrator: PipelineOrchestrator,
@@ -117,7 +128,30 @@ async def _ingest_youtube(
         "text/plain",
     )
 
-    title = f"YouTube: {video_id}"
+    # Fetch rich metadata from YouTube Data API
+    yt_metadata = None
+    try:
+        yt_metadata = metadata_service.fetch_metadata(video_id)
+        logger.info("Fetched metadata for video %s: %s", video_id, yt_metadata.title)
+    except Exception as e:
+        logger.warning("Failed to fetch YouTube metadata for %s: %s", video_id, e)
+
+    title = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
+    content_metadata = {
+        "video_id": video_id,
+        "language": transcript.language,
+        "segment_count": len(transcript.segments),
+        "resource_key": resource_key,
+        "published_at": yt_metadata.published_at if yt_metadata else None,
+        "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
+        "channel_id": yt_metadata.channel_id if yt_metadata else None,
+        "channel_title": yt_metadata.channel_title if yt_metadata else None,
+        "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
+        "view_count": yt_metadata.view_count if yt_metadata else None,
+        "like_count": yt_metadata.like_count if yt_metadata else None,
+        "description_urls": yt_metadata.description_urls if yt_metadata else [],
+    }
+
     metadata = ContentMetadata(
         content_type="youtube",
         title=title,
@@ -125,15 +159,42 @@ async def _ingest_youtube(
         file_size=file_size,
         file_path=file_path,
         author=key_id,
-        metadata={
-            "video_id": video_id,
-            "language": transcript.language,
-            "segment_count": len(transcript.segments),
-            "resource_key": resource_key,
-        },
+        tags=yt_metadata.tags if yt_metadata else [],
+        metadata=content_metadata,
     )
     created = await surreal_repo.create_content(metadata)
     content_id = created.id or video_id
+
+    # Save metadata.json to MinIO
+    metadata_path = f"youtube/{video_id}/metadata.json"
+    metadata_dict = {
+        "id": content_id,
+        "video_id": video_id,
+        "title": title,
+        "description": yt_metadata.description if yt_metadata else None,
+        "description_urls": yt_metadata.description_urls if yt_metadata else [],
+        "channel_id": yt_metadata.channel_id if yt_metadata else None,
+        "channel_title": yt_metadata.channel_title if yt_metadata else None,
+        "published_at": yt_metadata.published_at if yt_metadata else None,
+        "duration": yt_metadata.duration_formatted if yt_metadata else None,
+        "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
+        "view_count": yt_metadata.view_count if yt_metadata else None,
+        "like_count": yt_metadata.like_count if yt_metadata else None,
+        "tags": yt_metadata.tags if yt_metadata else [],
+        "thumbnails": yt_metadata.thumbnails if yt_metadata else {},
+        "language": transcript.language,
+        "segment_count": len(transcript.segments),
+        "transcript_length": len(transcript_text),
+        "file_size": file_size,
+        "author": key_id,
+        "created_at": created.created_at.isoformat() if created.created_at else None,
+        "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
+    }
+    await minio_storage.upload(
+        metadata_path,
+        io.BytesIO(json.dumps(metadata_dict, indent=2).encode("utf-8")),
+        "application/json",
+    )
 
     job = await orchestrator.submit(
         content_id,
