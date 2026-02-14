@@ -3,6 +3,8 @@
 
 import argparse
 import json
+import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -13,7 +15,18 @@ from menos.client.signer import RequestSigner
 from menos.config import settings
 
 
+def _fix_msys_path(path: str) -> str:
+    """Fix MSYS/Git Bash path mangling (e.g. C:/api/v1/content -> /api/v1/content)."""
+    mangled = re.match(r"^[A-Za-z]:(/.+)$", path)
+    if mangled:
+        return mangled.group(1)
+    return path
+
+
 def main():
+    # Disable MSYS path conversion for this process
+    os.environ.setdefault("MSYS_NO_PATHCONV", "1")
+
     parser = argparse.ArgumentParser(description="Make signed HTTP requests to the menos API")
     parser.add_argument("method", help="HTTP method (GET, POST, DELETE, PATCH, PUT)")
     parser.add_argument("path", help="Request path (e.g. /api/v1/content)")
@@ -32,9 +45,12 @@ def main():
     )
     args = parser.parse_args()
 
+    # Fix MSYS path mangling (already happened before env var takes effect)
+    request_path = _fix_msys_path(args.path)
+
     base_url = settings.api_base_url
     method = args.method.upper()
-    url = f"{base_url}{args.path}"
+    url = f"{base_url}{request_path}"
     parsed = urlparse(base_url)
     host = parsed.hostname
     if parsed.port and parsed.port not in (80, 443):
@@ -51,7 +67,7 @@ def main():
         body_bytes = args.body.encode()
 
     signer = RequestSigner.from_file(args.key)
-    sig_headers = signer.sign_request(method, args.path, body=body_bytes, host=host)
+    sig_headers = signer.sign_request(method, request_path, body=body_bytes, host=host)
 
     headers = {**sig_headers}
     if body_bytes:

@@ -2274,7 +2274,7 @@ class TestPipelineFeedbackStorage:
         assert create_args[0] == "tag_alias"
         assert create_args[1]["variant"] == "langchain"
         assert create_args[1]["canonical"] == "LangChain"
-        assert create_args[1]["count"] == 1
+        assert create_args[1]["usage_count"] == 1
 
     @pytest.mark.asyncio
     async def test_record_tag_alias_update(self):
@@ -2282,7 +2282,7 @@ class TestPipelineFeedbackStorage:
         mock_db.query.return_value = [
             {
                 "result": [
-                    {"id": "tag_alias:abc", "count": 4},
+                    {"id": "tag_alias:abc", "usage_count": 4},
                 ]
             }
         ]
@@ -2293,4 +2293,4 @@ class TestPipelineFeedbackStorage:
         mock_db.update.assert_called_once()
         update_args = mock_db.update.call_args[0]
         assert update_args[0] == "tag_alias:abc"
-        assert update_args[1]["count"] == 5
+        assert update_args[1]["usage_count"] == 5

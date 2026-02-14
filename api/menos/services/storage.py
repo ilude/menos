@@ -477,7 +477,7 @@ class SurrealDBRepository:
         """Get most common variant->canonical tag mappings."""
         result = self.db.query(
             "SELECT variant, canonical FROM tag_alias "
-            "ORDER BY count DESC, updated_at DESC LIMIT $limit",
+            "ORDER BY usage_count DESC, updated_at DESC LIMIT $limit",
             {"limit": limit},
         )
         rows = self._parse_query_result(result)
@@ -498,7 +498,7 @@ class SurrealDBRepository:
             return
 
         result = self.db.query(
-            "SELECT id, count FROM tag_alias WHERE variant = $variant "
+            "SELECT id, usage_count FROM tag_alias WHERE variant = $variant "
             "AND canonical = $canonical LIMIT 1",
             {"variant": variant, "canonical": canonical},
         )
@@ -509,7 +509,7 @@ class SurrealDBRepository:
             if alias_id is None:
                 return
             try:
-                existing_count = int(rows[0].get("count", 0) or 0)
+                existing_count = int(rows[0].get("usage_count", 0) or 0)
             except (TypeError, ValueError):
                 existing_count = 0
             self.db.update(
@@ -517,7 +517,7 @@ class SurrealDBRepository:
                 {
                     "variant": variant,
                     "canonical": canonical,
-                    "count": existing_count + 1,
+                    "usage_count": existing_count + 1,
                     "updated_at": datetime.now(UTC),
                 },
             )
@@ -528,7 +528,7 @@ class SurrealDBRepository:
             {
                 "variant": variant,
                 "canonical": canonical,
-                "count": 1,
+                "usage_count": 1,
                 "updated_at": datetime.now(UTC),
             },
         )
