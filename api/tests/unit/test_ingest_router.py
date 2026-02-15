@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from menos.models import ContentMetadata
-from menos.routers.ingest import canonicalize_web_url
+from menos.routers.ingest import _has_incomplete_metadata, canonicalize_web_url
 from menos.services.docling import DoclingResult
 from menos.services.url_detector import DetectedURL
 from menos.services.youtube import TranscriptSegment, YouTubeTranscript
@@ -276,3 +276,254 @@ def test_legacy_youtube_ingest_endpoint_is_removed(authed_client):
         json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
     )
     assert response.status_code == 405
+
+
+# --- _has_incomplete_metadata unit tests ---
+
+
+def test_has_incomplete_metadata_placeholder_title():
+    record = ContentMetadata(
+        id="abc",
+        content_type="youtube",
+        title="YouTube: dQw4w9WgXcQ",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+        metadata={},
+    )
+    assert _has_incomplete_metadata(record, "dQw4w9WgXcQ") is True
+
+
+def test_has_incomplete_metadata_no_title():
+    record = ContentMetadata(
+        id="abc",
+        content_type="youtube",
+        title=None,
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+    )
+    assert _has_incomplete_metadata(record, "dQw4w9WgXcQ") is True
+
+
+def test_has_incomplete_metadata_missing_channel_title():
+    record = ContentMetadata(
+        id="abc",
+        content_type="youtube",
+        title="Some Real Title",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+        metadata={"language": "en"},
+    )
+    assert _has_incomplete_metadata(record, "dQw4w9WgXcQ") is True
+
+
+def test_has_incomplete_metadata_complete_record():
+    record = ContentMetadata(
+        id="abc",
+        content_type="youtube",
+        title="Rick Astley - Never Gonna Give You Up",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+        metadata={"channel_title": "Rick Astley"},
+    )
+    assert _has_incomplete_metadata(record, "dQw4w9WgXcQ") is False
+
+
+def test_has_incomplete_metadata_no_record():
+    assert _has_incomplete_metadata(None, "dQw4w9WgXcQ") is False
+
+
+def test_has_incomplete_metadata_no_id():
+    record = ContentMetadata(
+        content_type="youtube",
+        title="YouTube: dQw4w9WgXcQ",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+    )
+    assert _has_incomplete_metadata(record, "dQw4w9WgXcQ") is False
+
+
+# --- Backfill path integration tests ---
+
+
+def _existing_record_with_placeholder(video_id: str = "dQw4w9WgXcQ") -> ContentMetadata:
+    return ContentMetadata(
+        id="existing-yt1",
+        content_type="youtube",
+        title=f"YouTube: {video_id}",
+        mime_type="text/plain",
+        file_size=500,
+        file_path=f"youtube/{video_id}/transcript.txt",
+        author="test-key",
+        metadata={
+            "video_id": video_id,
+            "language": "en",
+            "segment_count": 42,
+            "resource_key": f"yt:{video_id}",
+        },
+    )
+
+
+def test_backfill_triggered_by_placeholder_title(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+    mock_minio_storage,
+):
+    existing = _existing_record_with_placeholder()
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
+    mock_surreal_repo.db = MagicMock()
+    mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
+    mock_minio_storage.download = AsyncMock(return_value=b"transcript text here")
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Rick Astley - Never Gonna Give You Up"
+    assert data["content_id"] == "existing-yt1"
+    assert data["job_id"] is None
+
+    # Verify DB update was called with RecordID
+    mock_surreal_repo.db.query.assert_called_once()
+    call_args = mock_surreal_repo.db.query.call_args
+    assert "UPDATE content SET" in call_args[0][0]
+    params = call_args[0][1]
+    assert params["title"] == "Rick Astley - Never Gonna Give You Up"
+    assert params["tags"] == ["rick astley", "never gonna give you up"]
+
+    # Verify metadata.json uploaded to MinIO
+    upload_calls = mock_minio_storage.upload.await_args_list
+    assert any("metadata.json" in str(c) for c in upload_calls)
+
+
+def test_backfill_preserves_existing_metadata_fields(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+    mock_minio_storage,
+):
+    existing = _existing_record_with_placeholder()
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
+    mock_surreal_repo.db = MagicMock()
+    mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
+    mock_minio_storage.download = AsyncMock(return_value=b"transcript")
+
+    authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    # Verify the merged metadata preserves original fields
+    call_args = mock_surreal_repo.db.query.call_args
+    merged_meta = call_args[0][1]["metadata"]
+    assert merged_meta["language"] == "en"
+    assert merged_meta["segment_count"] == 42
+    assert merged_meta["resource_key"] == "yt:dQw4w9WgXcQ"
+    # And includes new YouTube API fields
+    assert merged_meta["channel_title"] == "Rick Astley"
+    assert merged_meta["channel_id"] == "UCuAXFkgsw1L7xaCfnd5JJOw"
+    assert merged_meta["published_at"] == "2009-10-25T06:57:33Z"
+
+
+def test_backfill_metadata_fetch_failure_returns_existing(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+):
+    existing = _existing_record_with_placeholder()
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
+    mock_metadata_service.fetch_metadata.side_effect = ValueError("API key not configured")
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "YouTube: dQw4w9WgXcQ"
+    assert data["content_id"] == "existing-yt1"
+    assert data["job_id"] is None
+
+
+def test_backfill_db_update_failure_returns_stale_data(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+):
+    existing = _existing_record_with_placeholder()
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
+    mock_surreal_repo.db = MagicMock()
+    mock_surreal_repo.db.query.side_effect = RuntimeError("DB connection lost")
+    mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    # Falls back to existing stale title
+    assert data["title"] == "YouTube: dQw4w9WgXcQ"
+    assert data["content_id"] == "existing-yt1"
+
+
+def test_complete_youtube_record_skips_backfill(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+    mock_youtube_service,
+):
+    existing = ContentMetadata(
+        id="existing-yt2",
+        content_type="youtube",
+        title="Rick Astley - Never Gonna Give You Up",
+        mime_type="text/plain",
+        file_size=500,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+        metadata={"channel_title": "Rick Astley", "language": "en"},
+    )
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content_id"] == "existing-yt2"
+    assert data["title"] == "Rick Astley - Never Gonna Give You Up"
+    assert data["job_id"] is None
+
+    # No metadata fetch, no DB update, no transcript fetch
+    mock_metadata_service.fetch_metadata.assert_not_called()
+    mock_youtube_service.fetch_transcript.assert_not_called()
+
+
+def test_backfill_minio_failure_still_succeeds(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+    mock_minio_storage,
+):
+    """MinIO metadata.json upload failure is non-fatal (DB is source of truth)."""
+    existing = _existing_record_with_placeholder()
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
+    mock_surreal_repo.db = MagicMock()
+    mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
+    mock_minio_storage.download = AsyncMock(return_value=b"transcript")
+    mock_minio_storage.upload = AsyncMock(side_effect=RuntimeError("MinIO down"))
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    # DB update succeeded, so we get the new title
+    assert data["title"] == "Rick Astley - Never Gonna Give You Up"

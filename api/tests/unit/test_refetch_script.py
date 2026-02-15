@@ -292,10 +292,15 @@ class TestRefetchAll:
 
         await refetch_all()
 
-        mocks["surreal"].db.query.assert_called_once_with(
-            "UPDATE content SET title = $title WHERE id = $id",
-            {"title": yt.title, "id": "content:db_up"},
-        )
+        mocks["surreal"].db.query.assert_called_once()
+        call_args = mocks["surreal"].db.query.call_args
+        assert "UPDATE content SET" in call_args[0][0]
+        params = call_args[0][1]
+        assert params["title"] == yt.title
+        assert params["tags"] == yt.tags
+        assert params["id"] == "content:db_up"
+        assert params["metadata"]["channel_title"] == yt.channel_title
+        assert params["metadata"]["published_at"] == yt.published_at
 
     @pytest.mark.asyncio
     async def test_handles_surrealdb_update_failure(self, patched_refetch, caplog):
