@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends
 from pydantic import AnyHttpUrl, BaseModel
+from surrealdb import RecordID
 
 from menos.auth.dependencies import AuthenticatedKeyId
 from menos.models import ContentMetadata
@@ -164,13 +165,14 @@ async def _ingest_youtube(
         }
 
         # Update SurrealDB record (use direct query like refetch script)
+        # Note: WHERE id = $id requires RecordID object, not string
         surreal_repo.db.query(
             "UPDATE content SET title = $title, tags = $tags, metadata = $metadata WHERE id = $id",
             {
                 "title": title,
                 "tags": yt_metadata.tags if yt_metadata else [],
                 "metadata": updated_metadata,
-                "id": existing.id,
+                "id": RecordID("content", existing.id),
             },
         )
         logger.info("Updated metadata for video %s in database", video_id)
