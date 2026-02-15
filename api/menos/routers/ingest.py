@@ -176,6 +176,14 @@ async def _ingest_youtube(
         )
         await surreal_repo.update_content(existing.id, updated)
 
+        # Read transcript for metadata.json
+        try:
+            transcript_bytes = await minio_storage.download(existing.file_path)
+            transcript_text = transcript_bytes.decode("utf-8")
+        except Exception as e:
+            logger.warning("Failed to read transcript for metadata: %s", e)
+            transcript_text = ""
+
         # Update MinIO metadata.json
         metadata_path = f"youtube/{video_id}/metadata.json"
         metadata_dict = {
@@ -195,6 +203,7 @@ async def _ingest_youtube(
             "thumbnails": yt_metadata.thumbnails if yt_metadata else {},
             "language": language,
             "segment_count": segment_count,
+            "transcript_length": len(transcript_text),
             "file_size": existing.file_size,
             "author": existing.author,
             "created_at": existing.created_at.isoformat() if existing.created_at else None,
