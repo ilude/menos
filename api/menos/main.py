@@ -11,6 +11,7 @@ from surrealdb import Surreal
 
 from menos.config import get_settings
 from menos.routers import (
+    annotations,
     auth,
     content,
     entities,
@@ -181,6 +182,7 @@ app.include_router(health.router)
 app.include_router(auth.router, prefix="/api/v1")
 
 # Protected endpoints
+app.include_router(annotations.router, prefix="/api/v1")
 app.include_router(content.router, prefix="/api/v1")
 app.include_router(entities.router, prefix="/api/v1")
 app.include_router(graph.router, prefix="/api/v1")

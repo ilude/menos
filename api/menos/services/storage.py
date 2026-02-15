@@ -570,6 +570,31 @@ class SurrealDBRepository:
             return self._parse_content(raw_items[0])
         return None
 
+    async def find_content_by_parent_id(
+        self, parent_content_id: str, content_type: str | None = None
+    ) -> list[ContentMetadata]:
+        """Find content records linked to a parent content ID via metadata.
+
+        Args:
+            parent_content_id: Parent content ID to filter by
+            content_type: Optional filter by content type
+
+        Returns:
+            List of content metadata ordered by created_at DESC
+        """
+        query = (
+            "SELECT * FROM content "
+            "WHERE metadata.parent_content_id = $parent_id"
+        )
+        params: dict = {"parent_id": parent_content_id}
+        if content_type:
+            query += " AND content_type = $content_type"
+            params["content_type"] = content_type
+        query += " ORDER BY created_at DESC"
+        result = self.db.query(query, params)
+        rows = self._parse_query_result(result)
+        return [self._parse_content(row) for row in rows]
+
     async def create_link(self, link: LinkModel) -> LinkModel:
         """Create link between content items.
 
