@@ -110,7 +110,14 @@ async def _ingest_youtube(
     resource_key = generate_resource_key("youtube", video_id)
 
     existing = await surreal_repo.find_content_by_resource_key(resource_key)
-    if existing and existing.id:
+
+    # Check if existing record has complete metadata (non-placeholder title)
+    has_placeholder_title = (
+        existing and existing.title and existing.title.startswith(f"YouTube: {video_id}")
+    )
+
+    # Return early only if record exists AND has real metadata
+    if existing and existing.id and not has_placeholder_title:
         return IngestResponse(
             content_id=existing.id,
             content_type=existing.content_type,
@@ -118,6 +125,96 @@ async def _ingest_youtube(
             job_id=None,
         )
 
+    # Handle existing record with incomplete metadata
+    if existing and existing.id and has_placeholder_title:
+        logger.info("Updating existing record %s with YouTube metadata", existing.id)
+
+        # Get transcript data from existing record
+        existing_meta = existing.metadata or {}
+        language = existing_meta.get("language", "en")
+        segment_count = existing_meta.get("segment_count", 0)
+
+        # Fetch rich metadata from YouTube Data API
+        yt_metadata = None
+        try:
+            yt_metadata = metadata_service.fetch_metadata(video_id)
+            logger.info("Fetched metadata for video %s: %s", video_id, yt_metadata.title)
+        except Exception as e:
+            logger.warning("Failed to fetch YouTube metadata for %s: %s", video_id, e)
+            # If metadata fetch fails again, return existing record unchanged
+            return IngestResponse(
+                content_id=existing.id,
+                content_type=existing.content_type,
+                title=existing.title or f"YouTube: {video_id}",
+                job_id=None,
+            )
+
+        # Update title and metadata fields
+        title = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
+        updated_metadata = {
+            **existing_meta,
+            "published_at": yt_metadata.published_at if yt_metadata else None,
+            "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
+            "channel_id": yt_metadata.channel_id if yt_metadata else None,
+            "channel_title": yt_metadata.channel_title if yt_metadata else None,
+            "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
+            "view_count": yt_metadata.view_count if yt_metadata else None,
+            "like_count": yt_metadata.like_count if yt_metadata else None,
+            "description_urls": yt_metadata.description_urls if yt_metadata else [],
+        }
+
+        # Update SurrealDB record
+        updated = ContentMetadata(
+            content_type="youtube",
+            title=title,
+            mime_type=existing.mime_type,
+            file_size=existing.file_size,
+            file_path=existing.file_path,
+            author=existing.author,
+            tags=yt_metadata.tags if yt_metadata else [],
+            metadata=updated_metadata,
+        )
+        await surreal_repo.update_content(existing.id, updated)
+
+        # Update MinIO metadata.json
+        metadata_path = f"youtube/{video_id}/metadata.json"
+        metadata_dict = {
+            "id": existing.id,
+            "video_id": video_id,
+            "title": title,
+            "description": yt_metadata.description if yt_metadata else None,
+            "description_urls": yt_metadata.description_urls if yt_metadata else [],
+            "channel_id": yt_metadata.channel_id if yt_metadata else None,
+            "channel_title": yt_metadata.channel_title if yt_metadata else None,
+            "published_at": yt_metadata.published_at if yt_metadata else None,
+            "duration": yt_metadata.duration_formatted if yt_metadata else None,
+            "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
+            "view_count": yt_metadata.view_count if yt_metadata else None,
+            "like_count": yt_metadata.like_count if yt_metadata else None,
+            "tags": yt_metadata.tags if yt_metadata else [],
+            "thumbnails": yt_metadata.thumbnails if yt_metadata else {},
+            "language": language,
+            "segment_count": segment_count,
+            "file_size": existing.file_size,
+            "author": existing.author,
+            "created_at": existing.created_at.isoformat() if existing.created_at else None,
+            "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
+        }
+        await minio_storage.upload(
+            metadata_path,
+            io.BytesIO(json.dumps(metadata_dict, indent=2).encode("utf-8")),
+            "application/json",
+        )
+
+        logger.info("Updated metadata for video %s", video_id)
+        return IngestResponse(
+            content_id=existing.id,
+            content_type="youtube",
+            title=title,
+            job_id=None,
+        )
+
+    # New video ingestion flow
     transcript = youtube_service.fetch_transcript(video_id)
     transcript_text = transcript.full_text
     file_path = f"youtube/{video_id}/transcript.txt"
