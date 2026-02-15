@@ -1,6 +1,6 @@
 [project]
 name = "menos-api"
-version = "0.7.2"
+version = "0.8.0"
 description = "Menos content vault API"
 requires-python = ">=3.11"
 dependencies = [
