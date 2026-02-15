@@ -118,8 +118,7 @@
 
     - name: Check ancestry when server has a known SHA
       ansible.builtin.command:
-        cmd: "git merge-base --is-ancestor {{ server_health.json.git_sha }} {{ local_git_sha.stdout }}"
-        chdir: /project
+        cmd: "git --git-dir={{ git_dir_result.stdout }} --work-tree=/project merge-base --is-ancestor {{ server_health.json.git_sha }} {{ local_git_sha.stdout }}"
       delegate_to: localhost
       register: ancestry_check
       changed_when: false
