@@ -67,26 +67,37 @@
       delegate_to: localhost
       changed_when: false
 
+    - name: Detect git directory (handles submodules)
+      ansible.builtin.shell: |
+        cd /project
+        if [ -f .git ]; then
+          # Submodule: read gitdir from .git file
+          gitdir=$(cat .git | sed 's/gitdir: //')
+          echo "/project/$gitdir"
+        else
+          echo "/project/.git"
+        fi
+      delegate_to: localhost
+      register: git_dir_result
+      changed_when: false
+
     - name: Get local git SHA
       ansible.builtin.command:
-        cmd: git rev-parse HEAD
-        chdir: /project
+        cmd: git --git-dir={{ git_dir_result.stdout }} --work-tree=/project rev-parse HEAD
       delegate_to: localhost
       register: local_git_sha
       changed_when: false
 
     - name: Get local git branch
       ansible.builtin.command:
-        cmd: git rev-parse --abbrev-ref HEAD
-        chdir: /project
+        cmd: git --git-dir={{ git_dir_result.stdout }} --work-tree=/project rev-parse --abbrev-ref HEAD
       delegate_to: localhost
       register: local_git_branch
       changed_when: false
 
     - name: Check for uncommitted changes
       ansible.builtin.command:
-        cmd: git status --porcelain
-        chdir: /project
+        cmd: git --git-dir={{ git_dir_result.stdout }} --work-tree=/project status --porcelain
       delegate_to: localhost
       register: git_status
       changed_when: false
