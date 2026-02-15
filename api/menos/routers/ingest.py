@@ -163,18 +163,17 @@ async def _ingest_youtube(
             "description_urls": yt_metadata.description_urls if yt_metadata else [],
         }
 
-        # Update SurrealDB record
-        updated = ContentMetadata(
-            content_type="youtube",
-            title=title,
-            mime_type=existing.mime_type,
-            file_size=existing.file_size,
-            file_path=existing.file_path,
-            author=existing.author,
-            tags=yt_metadata.tags if yt_metadata else [],
-            metadata=updated_metadata,
+        # Update SurrealDB record (use direct query like refetch script)
+        surreal_repo.db.query(
+            "UPDATE content SET title = $title, tags = $tags, metadata = $metadata WHERE id = $id",
+            {
+                "title": title,
+                "tags": yt_metadata.tags if yt_metadata else [],
+                "metadata": updated_metadata,
+                "id": existing.id,
+            },
         )
-        await surreal_repo.update_content(existing.id, updated)
+        logger.info("Updated metadata for video %s in database", video_id)
 
         # Read transcript for metadata.json
         try:
