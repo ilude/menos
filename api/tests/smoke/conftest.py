@@ -133,24 +133,25 @@ def smoke_first_content_id(smoke_authed_get):
 
 
 @pytest.fixture(scope="session")
-def smoke_first_youtube_video_id(smoke_authed_get):
-    """Get the first YouTube video ID from the database.
+def smoke_first_youtube_content_id(smoke_authed_get):
+    """Get the first YouTube content ID from the database.
 
     Returns:
-        YouTube video_id string
+        Content ID string for a YouTube item
 
     Raises:
-        pytest.skip: If no YouTube videos exist
+        pytest.skip: If no YouTube content exists
     """
-    response = smoke_authed_get("/api/v1/youtube")
-    assert response.status_code == 200, f"Failed to fetch YouTube videos: {response.status_code}"
+    response = smoke_authed_get("/api/v1/content?content_type=youtube&exclude_tags=")
+    assert response.status_code == 200, f"Failed to fetch YouTube content: {response.status_code}"
 
-    videos = response.json()
+    data = response.json()
+    items = data.get("items", [])
 
-    if not videos:
-        pytest.skip("No YouTube videos in database")
+    if not items:
+        pytest.skip("No YouTube content in database")
 
-    return videos[0]["video_id"]
+    return items[0]["id"]
 
 
 @pytest.fixture(scope="session")

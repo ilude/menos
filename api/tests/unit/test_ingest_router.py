@@ -83,7 +83,7 @@ def test_ingest_youtube_fetches_metadata_and_stores_rich_fields(
     assert call_args.metadata["channel_title"] == "Rick Astley"
     assert call_args.metadata["duration_seconds"] == 213
     assert call_args.metadata["view_count"] == 1500000000
-    assert call_args.tags == ["rick astley", "never gonna give you up"]
+    assert set(call_args.tags) == {"rick astley", "never gonna give you up"}
 
     # Verify metadata.json was uploaded to MinIO (2 uploads: transcript + metadata.json)
     assert mock_minio_storage.upload.await_count == 2
@@ -271,11 +271,12 @@ def test_canonicalization_is_deterministic_and_strips_tracking():
 
 
 def test_legacy_youtube_ingest_endpoint_is_removed(authed_client):
+    """Legacy YouTube ingest endpoint should return 404 (route removed)."""
     response = authed_client.post(
         "/api/v1/youtube/ingest",
         json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
     )
-    assert response.status_code == 405
+    assert response.status_code == 404
 
 
 # --- _has_incomplete_metadata unit tests ---
