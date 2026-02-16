@@ -94,6 +94,8 @@ def mock_surreal_repo():
     repo.get_neighborhood = AsyncMock(return_value=([], []))
     repo.update_content_extraction_status = AsyncMock()
     repo.find_content_by_resource_key = AsyncMock(return_value=None)
+    repo.get_chunk_counts = AsyncMock(return_value={})
+    repo.find_content_by_video_id = AsyncMock(return_value=None)
     return repo
 
 
