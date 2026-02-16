@@ -54,6 +54,7 @@ def test_ingest_youtube_fetches_metadata_and_stores_rich_fields(
     yt_meta = _youtube_metadata()
     mock_youtube_service.fetch_transcript.return_value = _youtube_transcript()
     mock_metadata_service.fetch_metadata.return_value = yt_meta
+    mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=None)
     mock_surreal_repo.create_content.return_value = ContentMetadata(
         id="content-y1",
         content_type="youtube",
@@ -106,6 +107,7 @@ def test_ingest_youtube_gracefully_handles_metadata_failure(
     mock_metadata_service.fetch_metadata.side_effect = ValueError(
         "YouTube API key not configured"
     )
+    mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=None)
     mock_surreal_repo.create_content.return_value = ContentMetadata(
         id="content-y2",
         content_type="youtube",
@@ -528,3 +530,125 @@ def test_backfill_minio_failure_still_succeeds(
     data = response.json()
     # DB update succeeded, so we get the new title
     assert data["title"] == "Rick Astley - Never Gonna Give You Up"
+
+
+# --- video_id fallback deduplication tests ---
+
+
+def test_video_id_fallback_finds_old_record_without_resource_key(
+    authed_client,
+    mock_surreal_repo,
+    mock_metadata_service,
+    mock_youtube_service,
+):
+    """When resource_key lookup misses, fallback to video_id lookup for old records."""
+    old_record = ContentMetadata(
+        id="old-yt-1",
+        content_type="youtube",
+        title="Rick Astley - Never Gonna Give You Up",
+        mime_type="text/plain",
+        file_size=500,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+        metadata={"video_id": "dQw4w9WgXcQ", "channel_title": "Rick Astley"},
+    )
+
+    # resource_key lookup misses, video_id lookup hits
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=None)
+    mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=old_record)
+    mock_surreal_repo.db = MagicMock()
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content_id"] == "old-yt-1"
+    assert data["title"] == "Rick Astley - Never Gonna Give You Up"
+    assert data["job_id"] is None
+
+    # Verify fallback was called
+    mock_surreal_repo.find_content_by_video_id.assert_awaited_once_with("dQw4w9WgXcQ")
+
+    # Verify resource_key backfill query was executed
+    mock_surreal_repo.db.query.assert_called_once()
+    call_args = mock_surreal_repo.db.query.call_args
+    assert "UPDATE content SET metadata.resource_key" in call_args[0][0]
+    params = call_args[0][1]
+    assert params["resource_key"] == "yt:dQw4w9WgXcQ"
+
+    # No new transcript fetch or metadata fetch
+    mock_youtube_service.fetch_transcript.assert_not_called()
+    mock_metadata_service.fetch_metadata.assert_not_called()
+
+
+def test_video_id_fallback_miss_proceeds_to_new_ingest(
+    authed_client,
+    mock_surreal_repo,
+    mock_youtube_service,
+    mock_metadata_service,
+    mock_pipeline_orchestrator,
+):
+    """When both resource_key and video_id lookups miss, proceed to create new record."""
+    # Both lookups return None
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=None)
+    mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=None)
+    mock_surreal_repo.create_content.return_value = ContentMetadata(
+        id="new-yt-1",
+        content_type="youtube",
+        title="Rick Astley - Never Gonna Give You Up",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+    )
+    mock_youtube_service.fetch_transcript.return_value = _youtube_transcript()
+    mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
+    mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-new"))
+
+    response = authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content_id"] == "new-yt-1"
+    assert data["job_id"] == "job-new"
+
+    # Verify both fallback and new ingestion were attempted
+    mock_surreal_repo.find_content_by_video_id.assert_awaited_once_with("dQw4w9WgXcQ")
+    mock_youtube_service.fetch_transcript.assert_called_once()
+    mock_surreal_repo.create_content.assert_awaited_once()
+
+
+def test_resource_key_backfill_uses_recordid(
+    authed_client,
+    mock_surreal_repo,
+):
+    """Verify resource_key backfill uses RecordID, not plain string."""
+    old_record = ContentMetadata(
+        id="abc123",
+        content_type="youtube",
+        title="Test Video",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/ABCDefgh123/transcript.txt",
+        metadata={"video_id": "ABCDefgh123", "channel_title": "Test"},
+    )
+
+    mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=None)
+    mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=old_record)
+    mock_surreal_repo.db = MagicMock()
+
+    authed_client.post(
+        "/api/v1/ingest", json={"url": "https://youtu.be/ABCDefgh123"}
+    )
+
+    # Extract the RecordID from the call
+    call_args = mock_surreal_repo.db.query.call_args
+    params = call_args[0][1]
+    record_id = params["id"]
+
+    # Verify it's a RecordID object, not a string
+    from surrealdb import RecordID
+    assert isinstance(record_id, RecordID)
+    assert str(record_id) == "content:abc123"

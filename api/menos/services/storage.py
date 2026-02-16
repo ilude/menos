@@ -604,6 +604,22 @@ class SurrealDBRepository:
             return self._parse_content(raw_items[0])
         return None
 
+    async def find_content_by_video_id(self, video_id: str) -> ContentMetadata | None:
+        """Find YouTube content by video_id.
+
+        Fallback when resource_key lookup misses old records.
+        """
+        result = self.db.query(
+            "SELECT * FROM content "
+            "WHERE metadata.video_id = $video_id AND content_type = 'youtube' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            {"video_id": video_id},
+        )
+        raw = self._parse_query_result(result)
+        if not raw:
+            return None
+        return self._parse_content(raw[0])
+
     async def find_content_by_parent_id(
         self, parent_content_id: str, content_type: str | None = None
     ) -> list[ContentMetadata]:

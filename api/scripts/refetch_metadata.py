@@ -17,6 +17,8 @@ import json
 import logging
 import time
 
+from surrealdb import RecordID
+
 from menos.services.di import get_storage_context
 from menos.services.youtube_metadata import YouTubeMetadataService
 
@@ -113,6 +115,8 @@ async def refetch_all(limit: int = 1000, delay: int = 30):
                     "like_count": yt_metadata.like_count,
                     "description_urls": yt_metadata.description_urls,
                 })
+                # Normalize ID: handle both "abc123" and "content:abc123" formats
+                raw_id = str(item.id).split(":")[-1]
                 surreal.db.query(
                     "UPDATE content SET "
                     "title = $title, "
@@ -123,7 +127,7 @@ async def refetch_all(limit: int = 1000, delay: int = 30):
                         "title": yt_metadata.title,
                         "tags": yt_metadata.tags,
                         "metadata": existing_meta,
-                        "id": item.id,
+                        "id": RecordID("content", raw_id),
                     },
                 )
                 logger.info("  Updated SurrealDB (title, tags, metadata)")

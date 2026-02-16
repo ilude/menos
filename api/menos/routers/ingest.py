@@ -183,6 +183,20 @@ async def _ingest_youtube(
 
     existing = await surreal_repo.find_content_by_resource_key(resource_key)
 
+    # Fallback: check by video_id for old records missing resource_key
+    if existing is None:
+        existing = await surreal_repo.find_content_by_video_id(video_id)
+        if existing:
+            # Backfill resource_key so future lookups use the fast path
+            surreal_repo.db.query(
+                "UPDATE content SET metadata.resource_key = $resource_key "
+                "WHERE id = $id",
+                {
+                    "resource_key": resource_key,
+                    "id": RecordID("content", str(existing.id).split(":")[-1]),
+                },
+            )
+
     # Return early only if record exists AND has complete metadata
     if existing and existing.id and not _has_incomplete_metadata(existing, video_id):
         return IngestResponse(

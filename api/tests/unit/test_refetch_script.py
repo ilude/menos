@@ -282,6 +282,8 @@ class TestRefetchAll:
     @pytest.mark.asyncio
     async def test_updates_title_in_surrealdb(self, patched_refetch):
         """surreal.db.query should be called with UPDATE statement."""
+        from surrealdb import RecordID
+
         mocks = patched_refetch
         item = make_content_item(item_id="content:db_up")
         mocks["surreal"].list_content.return_value = ([item], 1)
@@ -298,7 +300,10 @@ class TestRefetchAll:
         params = call_args[0][1]
         assert params["title"] == yt.title
         assert params["tags"] == yt.tags
-        assert params["id"] == "content:db_up"
+        # ID should be a RecordID object with table_name and id
+        assert isinstance(params["id"], RecordID)
+        assert params["id"].table_name == "content"
+        assert params["id"].id == "db_up"
         assert params["metadata"]["channel_title"] == yt.channel_title
         assert params["metadata"]["published_at"] == yt.published_at
 
@@ -331,3 +336,51 @@ class TestRefetchAll:
         mocks["minio"].download.assert_not_called()
         mocks["minio"].upload.assert_not_called()
         mocks["surreal"].db.query.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normalizes_recordid_with_table_prefix(self, patched_refetch):
+        """Item ID with 'content:' prefix should be split, RecordID created."""
+        from surrealdb import RecordID
+
+        mocks = patched_refetch
+        # Item ID includes the table prefix
+        item = make_content_item(item_id="content:abc123xyz")
+        mocks["surreal"].list_content.return_value = ([item], 1)
+
+        from scripts.refetch_metadata import refetch_all
+
+        await refetch_all()
+
+        # Verify that db.query was called with a RecordID object
+        mocks["surreal"].db.query.assert_called_once()
+        call_args = mocks["surreal"].db.query.call_args
+        params = call_args[0][1]
+
+        # The "id" parameter must be a RecordID object with correct parts
+        assert isinstance(params["id"], RecordID)
+        assert params["id"].table_name == "content"
+        assert params["id"].id == "abc123xyz"
+
+    @pytest.mark.asyncio
+    async def test_normalizes_recordid_without_prefix(self, patched_refetch):
+        """Item ID without prefix should still work with RecordID."""
+        from surrealdb import RecordID
+
+        mocks = patched_refetch
+        # Item ID without the table prefix
+        item = make_content_item(item_id="plain_id_456")
+        mocks["surreal"].list_content.return_value = ([item], 1)
+
+        from scripts.refetch_metadata import refetch_all
+
+        await refetch_all()
+
+        # Verify that db.query was called with a RecordID object
+        mocks["surreal"].db.query.assert_called_once()
+        call_args = mocks["surreal"].db.query.call_args
+        params = call_args[0][1]
+
+        # The "id" parameter must be a RecordID object
+        assert isinstance(params["id"], RecordID)
+        assert params["id"].table_name == "content"
+        assert params["id"].id == "plain_id_456"

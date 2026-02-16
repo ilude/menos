@@ -26,3 +26,26 @@ Parameterized `WHERE id = $param` and `WHERE ref_field = $param` clauses require
 
 ## Test Content Not Appearing in Queries
 Content tagged with "test" is excluded by default from `GET /api/v1/content` and `POST /api/v1/search`. Pass `exclude_tags=` (empty) to include test content, or `tags=test` to find it specifically. See `test-content.md` for full details.
+
+## SurrealDB Type Mismatches Are Silent
+
+SurrealDB does not raise errors when comparing incompatible types in WHERE clauses. A query like `WHERE content_id INSIDE $ids` will silently return zero rows if `$ids` contains RecordID objects but `content_id` stores plain strings (or vice versa). This is the most dangerous SurrealDB gotcha because:
+- The query succeeds (no error)
+- The result is empty (looks like "no matching data")
+- Unit tests with mocks won't catch it
+- Only live queries against real data reveal the mismatch
+
+**Debug approach**: Use `scripts/query.py` to inspect actual stored values and types before building parameterized queries.
+
+## Don't Assume Feature Gaps — Verify
+
+Before claiming SurrealDB doesn't support a specific feature, ALWAYS:
+1. Search the official documentation at surrealdb.com/docs
+2. Search GitHub issues for the project
+3. Check the latest release notes
+
+SurrealDB adds features rapidly. Conditional indexes, computed fields, and other advanced features may exist even if training data suggests otherwise.
+
+## ORDER BY When Porting Queries
+
+When moving query logic between routers (e.g., from a deleted YouTube router to the content router), port ALL query clauses — especially ORDER BY. Missing ORDER BY causes non-deterministic result ordering that may not be noticed in small datasets but breaks pagination and user expectations.
