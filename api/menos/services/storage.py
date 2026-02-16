@@ -407,19 +407,10 @@ class SurrealDBRepository:
             "SELECT content_id, count() AS cnt"
             " FROM chunk WHERE content_id INSIDE $ids"
             " GROUP BY content_id",
-            {"ids": [RecordID("content", cid) for cid in content_ids]},
+            {"ids": content_ids},
         )
         raw = self._parse_query_result(result)
-        counts: dict[str, int] = {}
-        for row in raw:
-            cid = row.get("content_id")
-            if hasattr(cid, "id"):
-                cid = str(cid.id)
-            elif hasattr(cid, "key"):
-                cid = str(cid.key)
-            if cid:
-                counts[str(cid)] = row.get("cnt", 0)
-        return counts
+        return {row["content_id"]: row.get("cnt", 0) for row in raw if "content_id" in row}
 
     async def delete_chunks(self, content_id: str) -> None:
         """Delete all chunks for content.
