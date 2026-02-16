@@ -33,6 +33,7 @@ class ContentItem(BaseModel):
     content_type: str
     title: str | None = None
     created_at: str
+    chunk_count: int = 0
     metadata: dict | None = None
 
 
@@ -222,12 +223,16 @@ async def list_content(
         order_by="created_at DESC",
     )
 
+    content_ids = [item.id for item in items if item.id]
+    chunk_counts = await surreal_repo.get_chunk_counts(content_ids)
+
     content_items = [
         ContentItem(
             id=item.id or "",
             content_type=item.content_type,
             title=item.title,
             created_at=item.created_at.isoformat() if item.created_at else "",
+            chunk_count=chunk_counts.get(item.id or "", 0),
             metadata=item.metadata,
         )
         for item in items

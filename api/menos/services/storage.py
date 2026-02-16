@@ -392,6 +392,35 @@ class SurrealDBRepository:
         raw_items = self._parse_query_result(result)
         return [self._parse_chunk(item) for item in raw_items]
 
+    async def get_chunk_counts(self, content_ids: list[str]) -> dict[str, int]:
+        """Get chunk counts for multiple content IDs in a single query.
+
+        Args:
+            content_ids: List of content IDs
+
+        Returns:
+            Dict mapping content_id to chunk count
+        """
+        if not content_ids:
+            return {}
+        result = self.db.query(
+            "SELECT content_id, count() AS cnt"
+            " FROM chunk WHERE content_id INSIDE $ids"
+            " GROUP BY content_id",
+            {"ids": [RecordID("content", cid) for cid in content_ids]},
+        )
+        raw = self._parse_query_result(result)
+        counts: dict[str, int] = {}
+        for row in raw:
+            cid = row.get("content_id")
+            if hasattr(cid, "id"):
+                cid = str(cid.id)
+            elif hasattr(cid, "key"):
+                cid = str(cid.key)
+            if cid:
+                counts[str(cid)] = row.get("cnt", 0)
+        return counts
+
     async def delete_chunks(self, content_id: str) -> None:
         """Delete all chunks for content.
 
