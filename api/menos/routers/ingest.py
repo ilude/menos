@@ -4,9 +4,10 @@ import hashlib
 import io
 import json
 import logging
+from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import AnyHttpUrl, BaseModel
 from surrealdb import RecordID
 
@@ -64,6 +65,7 @@ class IngestResponse(BaseModel):
 async def ingest_url(
     body: IngestRequest,
     key_id: AuthenticatedKeyId,
+    tags: Annotated[list[str] | None, Query()] = None,
     docling_client: DoclingClient = Depends(get_docling_client),
     youtube_service: YouTubeService = Depends(get_youtube_service),
     metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
@@ -86,6 +88,7 @@ async def ingest_url(
             surreal_repo=surreal_repo,
             orchestrator=orchestrator,
             detected_video_id=detected.extracted_id,
+            tags=tags,
         )
 
     return await _ingest_web(
@@ -95,6 +98,7 @@ async def ingest_url(
         minio_storage=minio_storage,
         surreal_repo=surreal_repo,
         orchestrator=orchestrator,
+        tags=tags,
     )
 
 
@@ -172,6 +176,7 @@ async def _ingest_youtube(
     surreal_repo: SurrealDBRepository,
     orchestrator: PipelineOrchestrator,
     detected_video_id: str,
+    tags: list[str] | None = None,
 ) -> IngestResponse:
     video_id = detected_video_id or youtube_service.extract_video_id(url)
     resource_key = generate_resource_key("youtube", video_id)
@@ -207,6 +212,7 @@ async def _ingest_youtube(
         minio_storage=minio_storage,
         surreal_repo=surreal_repo,
         orchestrator=orchestrator,
+        tags=tags,
     )
 
 
@@ -319,6 +325,7 @@ async def _ingest_new_youtube(
     minio_storage: MinIOStorage,
     surreal_repo: SurrealDBRepository,
     orchestrator: PipelineOrchestrator,
+    tags: list[str] | None = None,
 ) -> IngestResponse:
     """Ingest a new YouTube video (transcript + metadata + pipeline)."""
     transcript = youtube_service.fetch_transcript(video_id)
@@ -355,6 +362,9 @@ async def _ingest_new_youtube(
         "description_urls": yt_metadata.description_urls if yt_metadata else [],
     }
 
+    # Merge YouTube API tags with explicit tags from request
+    combined_tags = list(set((yt_metadata.tags if yt_metadata else []) + (tags or [])))
+
     metadata = ContentMetadata(
         content_type="youtube",
         title=title,
@@ -362,7 +372,7 @@ async def _ingest_new_youtube(
         file_size=file_size,
         file_path=file_path,
         author=key_id,
-        tags=yt_metadata.tags if yt_metadata else [],
+        tags=combined_tags,
         metadata=content_metadata,
     )
     created = await surreal_repo.create_content(metadata)
@@ -410,6 +420,7 @@ async def _ingest_web(
     minio_storage: MinIOStorage,
     surreal_repo: SurrealDBRepository,
     orchestrator: PipelineOrchestrator,
+    tags: list[str] | None = None,
 ) -> IngestResponse:
     canonical_url = canonicalize_web_url(url)
     url_hash = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
@@ -441,6 +452,7 @@ async def _ingest_web(
         file_size=file_size,
         file_path=file_path,
         author=key_id,
+        tags=tags or [],
         metadata={
             "source_url": url,
             "canonical_url": canonical_url,

@@ -205,6 +205,7 @@ class SurrealDBRepository:
         limit: int = 50,
         content_type: str | None = None,
         tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
         order_by: str | None = None,
     ) -> tuple[list[ContentMetadata], int]:
         """List content metadata.
@@ -214,11 +215,21 @@ class SurrealDBRepository:
             limit: Query limit
             content_type: Optional filter by content type
             tags: Optional filter by tags (can have any specified tag)
+            exclude_tags: Optional tags to exclude (defaults to ["test"] if None)
             order_by: Optional ORDER BY clause (e.g. "created_at DESC")
 
         Returns:
             Tuple of (content list, total count)
         """
+        # Default exclude_tags to ["test"] if None, respect explicit empty list
+        if exclude_tags is None:
+            exclude_tags = ["test"]
+
+        # If tags filter includes a tag that's in exclude_tags, remove it from exclusions
+        # (allows searching for test content via tags=test without being blocked)
+        if tags and exclude_tags:
+            exclude_tags = [tag for tag in exclude_tags if tag not in tags]
+
         # Build parameterized query
         params: dict = {"limit": limit, "offset": offset}
         where_clauses = []
@@ -228,6 +239,9 @@ class SurrealDBRepository:
         if tags:
             where_clauses.append("tags CONTAINSANY $tags")
             params["tags"] = tags
+        if exclude_tags:
+            where_clauses.append("tags CONTAINSNONE $exclude_tags")
+            params["exclude_tags"] = exclude_tags
 
         where_clause = ""
         if where_clauses:
@@ -666,6 +680,7 @@ class SurrealDBRepository:
         self,
         tags: list[str] | None = None,
         content_type: str | None = None,
+        exclude_tags: list[str] | None = None,
         limit: int = 500,
     ) -> tuple[list[ContentMetadata], list[LinkModel]]:
         """Get graph data for visualization.
@@ -673,11 +688,16 @@ class SurrealDBRepository:
         Args:
             tags: Optional filter by tags (can have any specified tag)
             content_type: Optional filter by content type
+            exclude_tags: Optional tags to exclude (defaults to ["test"] if None)
             limit: Maximum number of nodes to return
 
         Returns:
             Tuple of (nodes, edges) where nodes are ContentMetadata and edges are LinkModel
         """
+        # Default exclude_tags to ["test"] if None, respect explicit empty list
+        if exclude_tags is None:
+            exclude_tags = ["test"]
+
         # Build content query with filters
         params: dict = {"limit": limit}
         where_clauses = []
@@ -687,6 +707,9 @@ class SurrealDBRepository:
         if tags:
             where_clauses.append("tags CONTAINSANY $tags")
             params["tags"] = tags
+        if exclude_tags:
+            where_clauses.append("tags CONTAINSNONE $exclude_tags")
+            params["exclude_tags"] = exclude_tags
 
         where_clause = ""
         if where_clauses:

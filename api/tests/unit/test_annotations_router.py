@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock
 
-import pytest
-
 from menos.models import ContentMetadata
 
 
@@ -118,7 +116,9 @@ def test_create_annotation_stores_in_minio(authed_client, mock_surreal_repo, moc
     assert call_args[0][2] == "text/markdown"
 
 
-def test_create_annotation_sets_metadata_fields(authed_client, mock_surreal_repo, mock_minio_storage):
+def test_create_annotation_sets_metadata_fields(
+    authed_client, mock_surreal_repo, mock_minio_storage
+):
     """ContentMetadata includes parent_content_id and source_type in metadata dict."""
     parent = _make_parent()
     mock_surreal_repo.get_content = AsyncMock(return_value=parent)

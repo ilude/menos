@@ -179,17 +179,47 @@ async def list_content(
     tags: Annotated[
         str | None, Query(description="Filter by tags (comma-separated, must have ALL)")
     ] = None,
+    exclude_tags: Annotated[
+        str | None,
+        Query(
+            description="Comma-separated tags to exclude (default: test when omitted). "
+            "Pass empty string to include all."
+        ),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
 ):
     """List stored content."""
     tags_list = [t.strip() for t in tags.split(",")] if tags else None
+
+    # Parse exclude_tags
+    exclude_tags_list: list[str] | None
+    if exclude_tags is None:
+        # Omitted -> defaults to ["test"] in storage layer
+        exclude_tags_list = None
+    elif exclude_tags == "":
+        # Empty string -> no exclusions
+        exclude_tags_list = []
+    else:
+        # Non-empty -> parse comma-separated values
+        exclude_tags_list = [t.strip() for t in exclude_tags.split(",") if t.strip()]
+
+    # If tags include "test", remove "test" from effective exclusions
+    effective_exclude_tags = exclude_tags_list
+    if tags_list and "test" in tags_list:
+        if effective_exclude_tags is None:
+            effective_exclude_tags = []
+        elif "test" in effective_exclude_tags:
+            effective_exclude_tags = [t for t in effective_exclude_tags if t != "test"]
+
     items, total = await surreal_repo.list_content(
         offset=offset,
         limit=limit,
         content_type=content_type,
         tags=tags_list,
+        exclude_tags=effective_exclude_tags,
+        order_by="created_at DESC",
     )
 
     content_items = [

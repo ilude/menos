@@ -532,3 +532,174 @@ class TestSurrealDBRepositoryListTagsWithCounts:
         assert result[1] == {"name": "apple", "count": 2}
         assert result[2] == {"name": "zebra", "count": 2}
         assert result[3] == {"name": "database", "count": 1}
+
+
+class TestContentRouterExcludeTagsLogic:
+    """Tests for exclude_tags override logic in content router."""
+
+    @pytest.mark.asyncio
+    async def test_tags_filter_removes_test_from_exclude_tags(self):
+        """Test that when tags=test is passed, 'test' is removed from exclude_tags."""
+        from menos.routers.content import list_content
+
+        mock_repo = MagicMock(spec=SurrealDBRepository)
+        mock_repo.list_content = AsyncMock(return_value=([], 0))
+
+        # Call with tags=test (should remove "test" from default exclude_tags)
+        await list_content(
+            key_id="test-key",
+            tags="test",
+            exclude_tags=None,  # Should default to ["test"], then be overridden
+            surreal_repo=mock_repo,
+        )
+
+        # Verify list_content was called with effective_exclude_tags=[]
+        call_args = mock_repo.list_content.call_args
+        assert call_args.kwargs["exclude_tags"] == []
+
+    @pytest.mark.asyncio
+    async def test_tags_filter_keeps_other_exclusions(self):
+        """Test that tags=test only removes 'test', not other exclude_tags."""
+        from menos.routers.content import list_content
+
+        mock_repo = MagicMock(spec=SurrealDBRepository)
+        mock_repo.list_content = AsyncMock(return_value=([], 0))
+
+        # Call with tags=test and exclude_tags=test,draft
+        await list_content(
+            key_id="test-key",
+            tags="test",
+            exclude_tags="test,draft",
+            surreal_repo=mock_repo,
+        )
+
+        # Verify 'test' was removed but 'draft' remains
+        call_args = mock_repo.list_content.call_args
+        assert call_args.kwargs["exclude_tags"] == ["draft"]
+
+    @pytest.mark.asyncio
+    async def test_exclude_tags_empty_string_disables_exclusion(self):
+        """Test that exclude_tags='' (empty string) results in empty list."""
+        from menos.routers.content import list_content
+
+        mock_repo = MagicMock(spec=SurrealDBRepository)
+        mock_repo.list_content = AsyncMock(return_value=([], 0))
+
+        await list_content(
+            key_id="test-key",
+            exclude_tags="",
+            surreal_repo=mock_repo,
+        )
+
+        # Verify exclude_tags=[] was passed
+        call_args = mock_repo.list_content.call_args
+        assert call_args.kwargs["exclude_tags"] == []
+
+
+class TestExcludeTagsParameter:
+    """Tests for exclude_tags parameter in list_content."""
+
+    @pytest.mark.asyncio
+    async def test_default_excludes_test_tag(self):
+        """Test that exclude_tags defaults to ['test'] when not provided."""
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": "content:1",
+                        "content_type": "youtube",
+                        "title": "Production Video",
+                        "mime_type": "text/plain",
+                        "file_size": 1000,
+                        "file_path": "youtube/vid1/transcript.txt",
+                        "tags": ["python"],
+                    }
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        # Call without exclude_tags parameter (should default to ["test"])
+        results, total = await repo.list_content()
+
+        # Verify query was called with exclude_tags filter
+        query_call = mock_db.query.call_args[0][0]
+        assert "tags CONTAINSNONE $exclude_tags" in query_call
+
+        # Verify the default exclude_tags was passed
+        params = mock_db.query.call_args[0][1]
+        assert params["exclude_tags"] == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_empty_exclude_tags_includes_all(self):
+        """Test that exclude_tags=[] disables tag exclusion."""
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": "content:1",
+                        "content_type": "youtube",
+                        "title": "Test Video",
+                        "mime_type": "text/plain",
+                        "file_size": 500,
+                        "file_path": "youtube/test/transcript.txt",
+                        "tags": ["test"],
+                    },
+                    {
+                        "id": "content:2",
+                        "content_type": "youtube",
+                        "title": "Production Video",
+                        "mime_type": "text/plain",
+                        "file_size": 1000,
+                        "file_path": "youtube/prod/transcript.txt",
+                        "tags": ["python"],
+                    },
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        # Call with exclude_tags=[] (should include test content)
+        results, total = await repo.list_content(exclude_tags=[])
+
+        # Verify query does NOT have the exclude filter
+        query_call = mock_db.query.call_args[0][0]
+        assert "CONTAINSNONE" not in query_call
+
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_explicit_exclude_tags_override(self):
+        """Test that explicitly passing exclude_tags=[] works at storage layer."""
+        mock_db = MagicMock()
+        mock_db.query.return_value = [
+            {
+                "result": [
+                    {
+                        "id": "content:1",
+                        "content_type": "youtube",
+                        "title": "Test Video",
+                        "mime_type": "text/plain",
+                        "file_size": 500,
+                        "file_path": "youtube/test/transcript.txt",
+                        "tags": ["test"],
+                    }
+                ]
+            }
+        ]
+
+        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+
+        # Call with explicit exclude_tags=[] to override default
+        results, total = await repo.list_content(tags=["test"], exclude_tags=[])
+
+        # Verify exclude_tags filter was NOT applied (empty list)
+        query_call = mock_db.query.call_args[0][0]
+        assert "CONTAINSNONE" not in query_call
+
+        assert len(results) == 1
+        assert results[0].tags == ["test"]

@@ -1,6 +1,5 @@
 """Tests for LLM JSON extraction utility."""
 
-import pytest
 
 from menos.services.llm_json import extract_json
 

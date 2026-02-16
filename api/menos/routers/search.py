@@ -18,6 +18,7 @@ class SearchQuery(BaseModel):
     query: str
     content_type: str | None = None
     tags: list[str] | None = None
+    exclude_tags: list[str] | None = None
     tier_min: str | None = None
     entities: list[str] | None = None  # Entity IDs to filter by
     entity_types: list[str] | None = None  # Filter by entity type
@@ -121,6 +122,7 @@ async def vector_search(
     Supports filtering by:
     - content_type: Type of content (youtube, markdown, etc.)
     - tags: Content can have ANY of the specified tags
+    - exclude_tags: Tags to exclude (defaults to ["test"] if None)
     - tier_min: Minimum quality tier (S, A, B, C, D)
     - entities: Content must be linked to ALL specified entity IDs
     - entity_types: Content must have entities of specified types
@@ -128,6 +130,13 @@ async def vector_search(
     """
     # Generate query embedding
     query_embedding = await embedding_service.embed_query(body.query)
+
+    # Default exclude_tags to ["test"] if None, respect explicit empty list
+    exclude_tags = body.exclude_tags if body.exclude_tags is not None else ["test"]
+
+    # If tags include "test", remove "test" from effective exclusions
+    if body.tags and "test" in body.tags and "test" in exclude_tags:
+        exclude_tags = [t for t in exclude_tags if t != "test"]
 
     # Build WHERE clause with tag filtering
     where_clause = (
@@ -138,6 +147,10 @@ async def vector_search(
     if body.tags:
         where_clause += " AND content_id.tags CONTAINSANY $tags"
         params["tags"] = body.tags
+
+    if exclude_tags:
+        where_clause += " AND content_id.tags CONTAINSNONE $exclude_tags"
+        params["exclude_tags"] = exclude_tags
 
     if body.content_type:
         where_clause += " AND content_id.content_type = $content_type"
