@@ -46,7 +46,7 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 - `POST /api/v1/auth/keys/reload` — Reload keys from disk
 
 ### Content
-- `GET /api/v1/content` — List content (`tags`, `content_type` query params)
+- `GET /api/v1/content` — List content (`tags`, `content_type`, `exclude_tags` query params; default `exclude_tags="test"`)
 - `GET /api/v1/content/stats` — Aggregate counts by processing status and content type
 - `GET /api/v1/content/{id}` — Enriched detail with pipeline results (summary, quality, topics, entities)
 - `GET /api/v1/content/{id}/download` — Raw file download from MinIO
@@ -55,6 +55,11 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 - `POST /api/v1/content` — Upload content (`tags` repeatable param; auto-extracts frontmatter + wiki-links)
 - `PATCH /api/v1/content/{id}` — Update metadata (tags, title, description)
 - `DELETE /api/v1/content/{id}` — Delete content and associated links
+
+#### exclude_tags Parameter
+- `GET /api/v1/content?exclude_tags=test` — Exclude specific tags (comma-separated)
+- `GET /api/v1/content?exclude_tags=` — Include all content (empty string disables exclusion)
+- Default behavior: `exclude_tags=["test"]` when omitted (test content hidden from results)
 
 ### Tags
 - `GET /api/v1/tags` — List all tags with counts (sorted by count DESC)
@@ -68,18 +73,16 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 - `GET /api/v1/graph/neighborhood/{id}` — Local neighborhood (`depth` 1-3)
 
 ### Search
-- `POST /api/v1/search` — Semantic vector search (`{"query": "...", "tags": [...], "limit": 20}`)
+- `POST /api/v1/search` — Semantic vector search (`{"query": "...", "tags": [...], "exclude_tags": [...], "limit": 20}`)
 - `POST /api/v1/search/agentic` — Agentic search (expansion + RRF + rerank + synthesis)
+
+#### exclude_tags Parameter
+- `exclude_tags: list[str] | None` in request body
+- Default behavior: `["test"]` when omitted (test content hidden from results)
+- Pass `[]` to include all content (disable exclusion)
 
 ### Usage
 - `GET /api/v1/usage` — Aggregated LLM usage and cost totals (`start_date`, `end_date`, `provider`, `model` filters)
-
-### YouTube
-- `POST /api/v1/youtube/ingest` — Ingest video by URL
-- `GET /api/v1/youtube/{video_id}` — Full detail (transcript, pipeline results, YouTube metadata)
-- `GET /api/v1/youtube/{video_id}/transcript` — Raw transcript as text/plain
-- `GET /api/v1/youtube` — List videos (`channel_id` filter)
-- `GET /api/v1/youtube/channels` — List channels with counts
 
 ### Health
 - `GET /health` — Returns `{"status": "ok", "git_sha": "...", "build_date": "..."}`

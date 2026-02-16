@@ -23,3 +23,6 @@ The surrealdb Python client returns `RecordID` objects (not strings) for `id`, `
 
 ## SurrealDB RecordID Objects (Write Side)
 Parameterized `WHERE id = $param` and `WHERE ref_field = $param` clauses require `RecordID` objects, not strings. `f"content:{id}"` silently matches nothing — the UPDATE/SELECT/DELETE succeeds but affects zero rows. Use `RecordID("content", id)` for all query params that compare against `id` or `record<T>` fields. Direct `db.select/update/delete("content:{id}")` calls accept string format.
+
+## Test Content Not Appearing in Queries
+Content tagged with "test" is excluded by default from `GET /api/v1/content` and `POST /api/v1/search`. Pass `exclude_tags=` (empty) to include test content, or `tags=test` to find it specifically. See `test-content.md` for full details.

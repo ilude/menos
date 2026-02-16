@@ -33,7 +33,7 @@ curl http://192.168.16.241:8000/ready    # Readiness (checks SurrealDB + MinIO +
 
 ```bash
 cd api
-uv run python scripts/signed_request.py GET /api/v1/youtube
+uv run python scripts/signed_request.py GET /api/v1/content?content_type=youtube
 ```
 
 ## Common Issues
