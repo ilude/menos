@@ -16,7 +16,7 @@ services:
               capabilities: [gpu]
 
   surrealdb:
-    image: surrealdb/surrealdb:latest
+    image: surrealdb/surrealdb:v2.6.1
     container_name: menos-surrealdb
     ports:
       - "8080:8000"
