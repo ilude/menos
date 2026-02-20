@@ -15,7 +15,7 @@ from menos.models import (
     EntityType,
     LinkModel,
 )
-from menos.services.storage import MinIOStorage, SurrealDBRepository, _compute_valid_tiers
+from menos.services.storage import S3Storage, SurrealDBRepository, _compute_valid_tiers
 
 
 class TestComputeValidTiers:
@@ -34,22 +34,22 @@ class TestComputeValidTiers:
         assert _compute_valid_tiers(" b ") == ["S", "A", "B"]
 
 
-class TestMinIOStorage:
-    """Tests for MinIO storage service."""
+class TestS3Storage:
+    """Tests for S3 storage service."""
 
     def test_init(self):
-        """Test MinIO storage initialization."""
+        """Test S3 storage initialization."""
         mock_client = MagicMock()
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
         assert storage.client == mock_client
         assert storage.bucket == "test-bucket"
 
     @pytest.mark.asyncio
     async def test_upload(self):
-        """Test file upload to MinIO."""
+        """Test file upload to S3."""
         mock_client = MagicMock()
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
         data = io.BytesIO(b"test content")
         result = await storage.upload("test/file.txt", data, "text/plain")
@@ -62,7 +62,7 @@ class TestMinIOStorage:
         """Test upload error handling."""
         mock_client = MagicMock()
         mock_client.put_object.side_effect = Exception("Upload failed")
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
         data = io.BytesIO(b"test content")
         with pytest.raises(Exception):
@@ -70,13 +70,13 @@ class TestMinIOStorage:
 
     @pytest.mark.asyncio
     async def test_download(self):
-        """Test file download from MinIO."""
+        """Test file download from S3."""
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.read.return_value = b"test content"
         mock_client.get_object.return_value = mock_response
 
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
         result = await storage.download("test/file.txt")
 
         assert result == b"test content"
@@ -84,9 +84,9 @@ class TestMinIOStorage:
 
     @pytest.mark.asyncio
     async def test_delete(self):
-        """Test file deletion from MinIO."""
+        """Test file deletion from S3."""
         mock_client = MagicMock()
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
         await storage.delete("test/file.txt")
 
@@ -480,8 +480,8 @@ class TestSurrealDBRepository:
         assert backlinks[0].target == "content:target456"
 
 
-class TestMinIOStorageErrors:
-    """Tests for MinIO error paths."""
+class TestS3StorageErrors:
+    """Tests for S3 error paths."""
 
     @pytest.mark.asyncio
     async def test_download_s3_error(self):
@@ -491,9 +491,9 @@ class TestMinIOStorageErrors:
         mock_client.get_object.side_effect = S3Error(
             "NoSuchKey", "Not found", "resource", "", "", ""
         )
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
-        with pytest.raises(RuntimeError, match="MinIO download failed"):
+        with pytest.raises(RuntimeError, match="S3 download failed"):
             await storage.download("missing/file.txt")
 
     @pytest.mark.asyncio
@@ -504,9 +504,9 @@ class TestMinIOStorageErrors:
         mock_client.remove_object.side_effect = S3Error(
             "AccessDenied", "Forbidden", "resource", "", "", ""
         )
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
-        with pytest.raises(RuntimeError, match="MinIO delete failed"):
+        with pytest.raises(RuntimeError, match="S3 delete failed"):
             await storage.delete("protected/file.txt")
 
     @pytest.mark.asyncio
@@ -517,10 +517,10 @@ class TestMinIOStorageErrors:
         mock_client.put_object.side_effect = S3Error(
             "NoSuchBucket", "Bucket missing", "resource", "", "", ""
         )
-        storage = MinIOStorage(mock_client, "test-bucket")
+        storage = S3Storage(mock_client, "test-bucket")
 
         data = io.BytesIO(b"test")
-        with pytest.raises(RuntimeError, match="MinIO upload failed"):
+        with pytest.raises(RuntimeError, match="S3 upload failed"):
             await storage.upload("test/file.txt", data, "text/plain")
 
 

@@ -127,14 +127,15 @@ def get_latest_youtube() -> dict:
 
 
 def download_transcript(file_path: str) -> str:
-    """Download transcript text from MinIO."""
+    """Download transcript text from S3-compatible storage."""
     client = Minio(
-        settings.minio_url,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
+        settings.s3_endpoint_url,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
+        region=settings.s3_region,
     )
-    bucket = settings.minio_bucket
+    bucket = settings.s3_bucket
     response = client.get_object(bucket, file_path)
     try:
         return response.read().decode("utf-8")
@@ -222,7 +223,7 @@ async def main():
     if not file_path:
         print("No file_path in record, cannot download transcript.", file=sys.stderr)
         sys.exit(1)
-    print(f"Downloading transcript from MinIO ({file_path})...")
+    print(f"Downloading transcript from S3 storage ({file_path})...")
     transcript = download_transcript(file_path)
     print(f"  Transcript length: {len(transcript)} chars")
 

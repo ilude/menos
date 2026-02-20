@@ -85,15 +85,16 @@ async def main():
     )
     args = parser.parse_args()
 
-    # Initialize MinIO
-    logger.info("Connecting to MinIO at %s", settings.minio_url)
+    # Initialize S3-compatible storage
+    logger.info("Connecting to S3 storage at %s", settings.s3_endpoint_url)
     minio_client = Minio(
-        settings.minio_url,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
+        settings.s3_endpoint_url,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
+        region=settings.s3_region,
     )
-    minio_storage = MinIOStorage(minio_client, settings.minio_bucket)
+    minio_storage = MinIOStorage(minio_client, settings.s3_bucket)
 
     # Initialize SurrealDB
     logger.info("Connecting to SurrealDB at %s", settings.surrealdb_url)

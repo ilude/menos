@@ -27,7 +27,7 @@ from menos.services.reranker import (
     RerankerLibraryProvider,
     RerankerProvider,
 )
-from menos.services.storage import MinIOStorage, SurrealDBRepository
+from menos.services.storage import S3Storage, SurrealDBRepository
 
 _llm_pricing_service: LLMPricingService | None = None
 
@@ -90,20 +90,21 @@ def _wrap_provider_with_metering(
 
 
 @asynccontextmanager
-async def get_storage_context() -> AsyncGenerator[tuple[MinIOStorage, SurrealDBRepository], None]:
+async def get_storage_context() -> AsyncGenerator[tuple[S3Storage, SurrealDBRepository], None]:
     """Create and manage storage service instances.
 
     Yields:
-        Tuple of (MinIOStorage, SurrealDBRepository)
+        Tuple of (S3Storage, SurrealDBRepository)
     """
-    # Initialize MinIO
-    minio_client = Minio(
-        settings.minio_url,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
+    # Initialize S3-compatible storage
+    s3_client = Minio(
+        settings.s3_endpoint_url,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
+        region=settings.s3_region,
     )
-    minio_storage = MinIOStorage(minio_client, settings.minio_bucket)
+    s3_storage = S3Storage(s3_client, settings.s3_bucket)
 
     # Initialize SurrealDB (blocking HTTP client needs http:// not ws://)
     surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
@@ -118,21 +119,26 @@ async def get_storage_context() -> AsyncGenerator[tuple[MinIOStorage, SurrealDBR
 
     try:
         await surreal_repo.connect()
-        yield minio_storage, surreal_repo
+        yield s3_storage, surreal_repo
     finally:
         # SurrealDB blocking HTTP client doesn't implement close()
         pass
 
 
-async def get_minio_storage() -> MinIOStorage:
-    """Get MinIO storage instance for dependency injection."""
-    minio_client = Minio(
-        settings.minio_url,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
+async def get_s3_storage() -> S3Storage:
+    """Get S3-compatible storage instance for dependency injection."""
+    s3_client = Minio(
+        settings.s3_endpoint_url,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
+        region=settings.s3_region,
     )
-    return MinIOStorage(minio_client, settings.minio_bucket)
+    return S3Storage(s3_client, settings.s3_bucket)
+
+
+# Backwards-compatible alias for routers not yet updated
+get_minio_storage = get_s3_storage
 
 
 async def get_surreal_repo() -> SurrealDBRepository:

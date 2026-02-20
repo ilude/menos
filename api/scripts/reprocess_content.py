@@ -503,15 +503,16 @@ async def main():
         logger.error("Cannot use both --entities-only and --skip-entities")
         return
 
-    # Initialize MinIO client
-    logger.info(f"Connecting to MinIO at {settings.minio_url}")
+    # Initialize S3-compatible storage client
+    logger.info(f"Connecting to S3 storage at {settings.s3_endpoint_url}")
     minio_client = Minio(
-        settings.minio_url,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        secure=settings.minio_secure,
+        settings.s3_endpoint_url,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+        secure=settings.s3_secure,
+        region=settings.s3_region,
     )
-    minio_storage = MinIOStorage(minio_client, settings.minio_bucket)
+    minio_storage = MinIOStorage(minio_client, settings.s3_bucket)
 
     # Initialize SurrealDB repository
     logger.info(f"Connecting to SurrealDB at {settings.surrealdb_url}")

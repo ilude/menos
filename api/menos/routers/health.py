@@ -36,16 +36,17 @@ async def check_surrealdb() -> str:
         return f"error: {e}"
 
 
-async def check_minio() -> str:
-    """Check MinIO connectivity."""
+async def check_s3() -> str:
+    """Check S3-compatible storage connectivity."""
     try:
         client = Minio(
-            settings.minio_url,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
+            settings.s3_endpoint_url,
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            secure=settings.s3_secure,
+            region=settings.s3_region,
         )
-        client.bucket_exists(settings.minio_bucket)
+        client.bucket_exists(settings.s3_bucket)
         return "ok"
     except Exception as e:
         return f"error: {e}"
@@ -67,7 +68,7 @@ async def ready():
     """Readiness check - verifies dependencies are available."""
     checks = {
         "surrealdb": await check_surrealdb(),
-        "minio": await check_minio(),
+        "s3": await check_s3(),
         "ollama": await check_ollama(),
     }
     all_ok = all(v == "ok" for v in checks.values())

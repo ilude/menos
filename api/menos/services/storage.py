@@ -1,4 +1,4 @@
-"""Storage services for MinIO and SurrealDB."""
+"""Storage services for S3-compatible storage and SurrealDB."""
 
 import re
 from datetime import UTC, datetime
@@ -38,21 +38,21 @@ def _compute_valid_tiers(tier_min: str | None) -> list[str]:
     return _TIER_ORDER[: _TIER_ORDER.index(normalized) + 1]
 
 
-class MinIOStorage:
-    """MinIO client wrapper for file storage."""
+class S3Storage:
+    """S3-compatible client wrapper for file storage."""
 
     def __init__(self, client: Minio, bucket: str):
-        """Initialize MinIO storage.
+        """Initialize S3 storage.
 
         Args:
-            client: Minio client instance
+            client: Minio SDK client instance
             bucket: Bucket name for storing files
         """
         self.client = client
         self.bucket = bucket
 
     async def upload(self, file_path: str, data: BinaryIO, content_type: str) -> int:
-        """Upload file to MinIO.
+        """Upload file to S3-compatible storage.
 
         Args:
             file_path: Path where to store file
@@ -79,10 +79,10 @@ class MinIOStorage:
             )
             return file_size
         except S3Error as e:
-            raise RuntimeError(f"MinIO upload failed: {e}") from e
+            raise RuntimeError(f"S3 upload failed: {e}") from e
 
     async def download(self, file_path: str) -> bytes:
-        """Download file from MinIO.
+        """Download file from S3-compatible storage.
 
         Args:
             file_path: Path to file
@@ -97,10 +97,10 @@ class MinIOStorage:
             response = self.client.get_object(self.bucket, file_path)
             return response.read()
         except S3Error as e:
-            raise RuntimeError(f"MinIO download failed: {e}") from e
+            raise RuntimeError(f"S3 download failed: {e}") from e
 
     async def delete(self, file_path: str) -> None:
-        """Delete file from MinIO.
+        """Delete file from S3-compatible storage.
 
         Args:
             file_path: Path to file
@@ -111,7 +111,11 @@ class MinIOStorage:
         try:
             self.client.remove_object(self.bucket, file_path)
         except S3Error as e:
-            raise RuntimeError(f"MinIO delete failed: {e}") from e
+            raise RuntimeError(f"S3 delete failed: {e}") from e
+
+
+# Backwards-compatible alias for routers not yet updated
+MinIOStorage = S3Storage
 
 
 class SurrealDBRepository:

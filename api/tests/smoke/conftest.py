@@ -198,25 +198,26 @@ def surreal_db(smoke_base_url):
 
 @pytest.fixture(scope="session")
 def minio_client():
-    """Direct MinIO client using settings from .env."""
+    """Direct S3-compatible client using settings from .env."""
     try:
-        raw_endpoint = settings.minio_url.strip()
+        raw_endpoint = settings.s3_endpoint_url.strip()
         parsed = urlparse(raw_endpoint if "://" in raw_endpoint else f"http://{raw_endpoint}")
         endpoint = parsed.netloc or parsed.path
-        secure = settings.minio_secure
+        secure = settings.s3_secure
         if parsed.scheme in {"http", "https"}:
             secure = parsed.scheme == "https"
 
         client = Minio(
             endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
             secure=secure,
+            region=settings.s3_region,
         )
         client.list_buckets()  # test connectivity
         return client
     except Exception as e:
-        pytest.skip(f"Cannot connect to MinIO at {settings.minio_url}: {e}")
+        pytest.skip(f"Cannot connect to S3 at {settings.s3_endpoint_url}: {e}")
 
 
 def pytest_configure(config):
