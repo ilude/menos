@@ -41,6 +41,17 @@ services:
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
     restart: unless-stopped
 
+  searxng:
+    image: searxng/searxng:latest
+    container_name: menos-searxng
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+    restart: unless-stopped
+
   docling-serve:
     image: quay.io/docling-project/docling-serve-cpu
     container_name: menos-docling-serve
