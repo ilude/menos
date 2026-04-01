@@ -50,6 +50,7 @@ services:
       - ./searxng:/etc/searxng
     environment:
       - SEARXNG_SECRET=${SEARXNG_SECRET}
+      - SEARXNG_BIND_ADDRESS=0.0.0.0:8080
     restart: unless-stopped
 
   docling-serve:
