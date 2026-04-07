@@ -182,6 +182,79 @@ class AgentService:
 
         return [query]
 
+    def _build_search_filters(
+        self,
+        embedding: list[float],
+        limit: int,
+        content_type: str | None,
+        tier_min: str | None,
+    ) -> tuple[str, str, dict]:
+        """Build SQL filter clauses and query params for vector search."""
+        type_filter = ""
+        if content_type:
+            type_filter = (
+                " AND content_id IN "
+                f"(SELECT VALUE id FROM content WHERE content_type = '{content_type}')"
+            )
+
+        valid_tiers = _compute_valid_tiers(tier_min)
+        tier_filter = ""
+        if valid_tiers:
+            tier_filter = " AND content_id.tier IN $valid_tiers"
+
+        query_params: dict = {"embedding": embedding, "limit": limit}
+        if valid_tiers:
+            query_params["valid_tiers"] = valid_tiers
+
+        return type_filter, tier_filter, query_params
+
+    def _parse_db_result(self, raw: list) -> list[dict]:
+        """Extract records from a raw SurrealDB query result (handles wrapped/unwrapped formats)."""
+        if not (raw and isinstance(raw, list)):
+            return []
+        first = raw[0]
+        if isinstance(first, dict) and "result" in first:
+            return first["result"]
+        if isinstance(first, dict):
+            return raw
+        return []
+
+    def _group_best_chunks(self, chunks: list[dict]) -> dict[str, tuple[float, str, str]]:
+        """Group chunks by content_id, keeping the highest-scoring chunk per content."""
+        best_per_content: dict[str, tuple[float, str, str]] = {}
+        for chunk in chunks:
+            content_id = str(chunk.get("content_id", ""))
+            score = float(chunk.get("score", 0.0))
+            text = chunk.get("text", "")
+            if content_id and (
+                content_id not in best_per_content or score > best_per_content[content_id][0]
+            ):
+                best_per_content[content_id] = (score, text, content_id)
+        return best_per_content
+
+    @staticmethod
+    def _normalize_record_id(rid: object) -> str:
+        """Normalize a SurrealDB RecordID object or string to a plain string."""
+        if hasattr(rid, "record_id"):
+            return str(rid.record_id)
+        if hasattr(rid, "id"):
+            return rid.id
+        return str(rid)
+
+    def _fetch_content_metadata(self) -> dict[str, dict]:
+        """Fetch all content records and return a mapping of id -> metadata."""
+        content_results = self.surreal_repo.db.query("SELECT * FROM content")
+        content_list = self._parse_db_result(content_results)
+
+        id_to_meta: dict[str, dict] = {}
+        for content in content_list:
+            rid = self._normalize_record_id(content.get("id"))
+            id_to_meta[rid] = {
+                "title": content.get("title"),
+                "content_type": content.get("content_type", "unknown"),
+            }
+        return id_to_meta
+
     async def _vector_search(
         self,
         embedding: list[float],
@@ -200,24 +273,10 @@ class AgentService:
         Returns:
             List of search results with id, content_type, title, score, snippet
         """
-        # Build content type filter
-        type_filter = ""
-        if content_type:
-            type_filter = (
-                " AND content_id IN "
-                f"(SELECT VALUE id FROM content WHERE content_type = '{content_type}')"
-            )
+        type_filter, tier_filter, query_params = self._build_search_filters(
+            embedding, limit, content_type, tier_min
+        )
 
-        valid_tiers = _compute_valid_tiers(tier_min)
-        tier_filter = ""
-        if valid_tiers:
-            tier_filter = " AND content_id.tier IN $valid_tiers"
-
-        query_params = {"embedding": embedding, "limit": limit}
-        if valid_tiers:
-            query_params["valid_tiers"] = valid_tiers
-
-        # Execute vector search
         search_results = self.surreal_repo.db.query(
             f"""
             SELECT text, content_id,
@@ -233,53 +292,12 @@ class AgentService:
             query_params,
         )
 
-        # Parse results
-        chunks: list[dict] = []
-        if search_results and isinstance(search_results, list) and len(search_results) > 0:
-            result_item = search_results[0]
-            if isinstance(result_item, dict) and "result" in result_item:
-                chunks = result_item["result"]
-            elif isinstance(result_item, dict) and "score" in result_item:
-                chunks = search_results
+        chunks = self._parse_db_result(search_results)
+        best_per_content = self._group_best_chunks(chunks)
+        id_to_meta = self._fetch_content_metadata()
 
-        # Group by content_id, keep best match per content
-        best_per_content: dict[str, tuple[float, str, str]] = {}
-        for chunk in chunks:
-            content_id = str(chunk.get("content_id", ""))
-            score = float(chunk.get("score", 0.0))
-            text = chunk.get("text", "")
-            if content_id and (
-                content_id not in best_per_content or score > best_per_content[content_id][0]
-            ):
-                best_per_content[content_id] = (score, text, content_id)
-
-        # Get content metadata
-        content_results = self.surreal_repo.db.query("SELECT * FROM content")
-        id_to_meta: dict[str, dict] = {}
-        content_list: list[dict] = []
-        if content_results and isinstance(content_results, list) and len(content_results) > 0:
-            result_item = content_results[0]
-            if isinstance(result_item, dict) and "result" in result_item:
-                content_list = result_item["result"]
-            elif isinstance(result_item, dict) and "id" in result_item:
-                content_list = content_results
-
-        for content in content_list:
-            rid = content.get("id")
-            if hasattr(rid, "record_id"):
-                rid = str(rid.record_id)
-            elif hasattr(rid, "id"):
-                rid = rid.id
-            else:
-                rid = str(rid)
-            id_to_meta[rid] = {
-                "title": content.get("title"),
-                "content_type": content.get("content_type", "unknown"),
-            }
-
-        # Build results
         results = []
-        for content_id, (score, text, cid) in best_per_content.items():
+        for content_id, (score, text, _cid) in best_per_content.items():
             meta = id_to_meta.get(content_id, {})
             results.append(
                 {
@@ -291,7 +309,6 @@ class AgentService:
                 }
             )
 
-        # Sort by score descending
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
 
