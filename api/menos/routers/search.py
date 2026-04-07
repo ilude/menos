@@ -110,39 +110,20 @@ class AgenticSearchResponse(BaseModel):
     timing: TimingInfo
 
 
-@router.post("", response_model=SearchResponse)
-async def vector_search(
-    body: SearchQuery,
-    key_id: AuthenticatedKeyId,
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
-    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
-):
-    """Semantic vector search across content.
-
-    Supports filtering by:
-    - content_type: Type of content (youtube, markdown, etc.)
-    - tags: Content can have ANY of the specified tags
-    - exclude_tags: Tags to exclude (defaults to ["test"] if None)
-    - tier_min: Minimum quality tier (S, A, B, C, D)
-    - entities: Content must be linked to ALL specified entity IDs
-    - entity_types: Content must have entities of specified types
-    - topics: Content must discuss topics matching the hierarchy pattern
-    """
-    # Generate query embedding
-    query_embedding = await embedding_service.embed_query(body.query)
-
-    # Default exclude_tags to ["test"] if None, respect explicit empty list
+def _resolve_exclude_tags(body: SearchQuery) -> list[str]:
+    """Compute effective exclude_tags, defaulting to ['test'] and removing conflicts."""
     exclude_tags = body.exclude_tags if body.exclude_tags is not None else ["test"]
-
-    # If tags include "test", remove "test" from effective exclusions
     if body.tags and "test" in body.tags and "test" in exclude_tags:
         exclude_tags = [t for t in exclude_tags if t != "test"]
+    return exclude_tags
 
-    # Build WHERE clause with tag filtering
+
+def _build_search_where_clause(body: SearchQuery, exclude_tags: list[str]) -> tuple[str, dict]:
+    """Build the WHERE clause and params dict for the vector search query."""
     where_clause = (
         "WHERE embedding != NONE AND vector::similarity::cosine(embedding, $embedding) > 0.3"
     )
-    params = {"embedding": query_embedding, "limit": body.limit}
+    params: dict = {"limit": body.limit}
 
     if body.tags:
         where_clause += " AND content_id.tags CONTAINSANY $tags"
@@ -161,7 +142,121 @@ async def vector_search(
         where_clause += " AND content_id.tier IN $valid_tiers"
         params["valid_tiers"] = valid_tiers
 
-    # Native SurrealDB vector search with cosine similarity
+    return where_clause, params
+
+
+def _parse_chunks_result(search_results: list) -> list[dict]:
+    """Unpack SurrealDB v2 query result into a flat list of chunks."""
+    if not (search_results and isinstance(search_results, list) and len(search_results) > 0):
+        return []
+    result_item = search_results[0]
+    if isinstance(result_item, dict) and "result" in result_item:
+        return result_item["result"]
+    if isinstance(result_item, dict) and "score" in result_item:
+        return search_results
+    return []
+
+
+def _best_chunks_per_content(chunks: list[dict]) -> dict[str, tuple[float, str]]:
+    """Group chunks by content_id, keeping the highest-scoring chunk per content."""
+    best: dict[str, tuple[float, str]] = {}
+    for chunk in chunks:
+        content_id = str(chunk.get("content_id", ""))
+        score = float(chunk.get("score", 0.0))
+        text = chunk.get("text", "")
+        if content_id and (content_id not in best or score > best[content_id][0]):
+            best[content_id] = (score, text)
+    return best
+
+
+def _parse_content_result(content_results: list) -> list[dict]:
+    """Unpack SurrealDB v2 content query result into a flat list."""
+    if not (content_results and isinstance(content_results, list) and len(content_results) > 0):
+        return []
+    result_item = content_results[0]
+    if isinstance(result_item, dict) and "result" in result_item:
+        return result_item["result"]
+    if isinstance(result_item, dict) and "id" in result_item:
+        return content_results
+    return []
+
+
+def _extract_content_id(rid) -> str:
+    """Normalize a SurrealDB record ID to a plain string ID."""
+    if hasattr(rid, "record_id"):
+        return str(rid.record_id)
+    if hasattr(rid, "id"):
+        return rid.id
+    return str(rid)
+
+
+def _fetch_content_metadata(
+    surreal_repo: SurrealDBRepository,
+    content_ids: list[str],
+) -> dict[str, dict]:
+    """Fetch title and content_type for a list of content IDs."""
+    if not content_ids:
+        return {}
+    content_refs = [f"content:{cid}" for cid in content_ids]
+    content_results = surreal_repo.db.query(
+        "SELECT * FROM content WHERE id IN $ids", {"ids": content_refs}
+    )
+    content_list = _parse_content_result(content_results)
+    id_to_meta: dict[str, dict] = {}
+    for content in content_list:
+        rid = content.get("id")
+        cid = _extract_content_id(rid)
+        id_to_meta[cid] = {
+            "title": content.get("title"),
+            "content_type": content.get("content_type", "unknown"),
+        }
+    return id_to_meta
+
+
+def _build_search_results(
+    best_per_content: dict[str, tuple[float, str]],
+    id_to_meta: dict[str, dict],
+) -> list[SearchResult]:
+    """Sort by score and build SearchResult objects."""
+    sorted_items = sorted(best_per_content.items(), key=lambda x: x[1][0], reverse=True)
+    results = []
+    for content_id, (score, text) in sorted_items:
+        meta = id_to_meta.get(content_id, {})
+        results.append(
+            SearchResult(
+                id=content_id,
+                content_type=meta.get("content_type", "unknown"),
+                title=meta.get("title"),
+                score=round(score, 4),
+                snippet=text[:200] if text else None,
+            )
+        )
+    return results
+
+
+@router.post("", response_model=SearchResponse)
+async def vector_search(
+    body: SearchQuery,
+    key_id: AuthenticatedKeyId,
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+):
+    """Semantic vector search across content.
+
+    Supports filtering by:
+    - content_type: Type of content (youtube, markdown, etc.)
+    - tags: Content can have ANY of the specified tags
+    - exclude_tags: Tags to exclude (defaults to ["test"] if None)
+    - tier_min: Minimum quality tier (S, A, B, C, D)
+    - entities: Content must be linked to ALL specified entity IDs
+    - entity_types: Content must have entities of specified types
+    - topics: Content must discuss topics matching the hierarchy pattern
+    """
+    query_embedding = await embedding_service.embed_query(body.query)
+    exclude_tags = _resolve_exclude_tags(body)
+    where_clause, params = _build_search_where_clause(body, exclude_tags)
+    params["embedding"] = query_embedding
+
     search_results = surreal_repo.db.query(
         f"""
         SELECT text, content_id,
@@ -174,27 +269,9 @@ async def vector_search(
         params,
     )
 
-    # Handle SurrealDB v2 query result format
-    chunks: list[dict] = []
-    if search_results and isinstance(search_results, list) and len(search_results) > 0:
-        result_item = search_results[0]
-        if isinstance(result_item, dict) and "result" in result_item:
-            chunks = result_item["result"]
-        elif isinstance(result_item, dict) and "score" in result_item:
-            chunks = search_results
+    chunks = _parse_chunks_result(search_results)
+    best_per_content = _best_chunks_per_content(chunks)
 
-    # Group by content_id, keep best match per content
-    best_per_content: dict[str, tuple[float, str]] = {}
-    for chunk in chunks:
-        content_id = str(chunk.get("content_id", ""))
-        score = float(chunk.get("score", 0.0))
-        text = chunk.get("text", "")
-        if content_id and (
-            content_id not in best_per_content or score > best_per_content[content_id][0]
-        ):
-            best_per_content[content_id] = (score, text)
-
-    # Apply entity filters if specified
     if body.entities or body.entity_types or body.topics:
         filtered_content = await _filter_by_entities(
             surreal_repo,
@@ -205,62 +282,91 @@ async def vector_search(
         )
         best_per_content = {k: v for k, v in best_per_content.items() if k in filtered_content}
 
-    # Get content metadata only for matched IDs
-    id_to_meta: dict[str, dict] = {}
-    content_list: list[dict] = []
-
-    content_ids = list(best_per_content.keys())
-    if content_ids:
-        content_refs = [f"content:{cid}" for cid in content_ids]
-        content_results = surreal_repo.db.query(
-            "SELECT * FROM content WHERE id IN $ids", {"ids": content_refs}
-        )
-
-        if content_results and isinstance(content_results, list) and len(content_results) > 0:
-            result_item = content_results[0]
-            if isinstance(result_item, dict) and "result" in result_item:
-                content_list = result_item["result"]
-            elif isinstance(result_item, dict) and "id" in result_item:
-                content_list = content_results
-
-    for content in content_list:
-        rid = content.get("id")
-        if hasattr(rid, "record_id"):
-            rid = str(rid.record_id)
-        elif hasattr(rid, "id"):
-            rid = rid.id
-        else:
-            rid = str(rid)
-        id_to_meta[rid] = {
-            "title": content.get("title"),
-            "content_type": content.get("content_type", "unknown"),
-        }
-
-    # Build results sorted by score
-    sorted_results = sorted(
-        best_per_content.items(),
-        key=lambda x: x[1][0],
-        reverse=True,
-    )
-
-    results = []
-    for content_id, (score, text) in sorted_results:
-        meta = id_to_meta.get(content_id, {})
-        results.append(
-            SearchResult(
-                id=content_id,
-                content_type=meta.get("content_type", "unknown"),
-                title=meta.get("title"),
-                score=round(score, 4),
-                snippet=text[:200] if text else None,
-            )
-        )
+    id_to_meta = _fetch_content_metadata(surreal_repo, list(best_per_content.keys()))
+    results = _build_search_results(best_per_content, id_to_meta)
 
     return SearchResponse(
         query=body.query,
         results=results,
         total=len(results),
     )
+
+
+def _extract_cid_from_item(item: dict) -> str:
+    """Extract plain content ID string from a content_entity result item."""
+    cid = item.get("content_id")
+    if hasattr(cid, "id"):
+        return cid.id
+    return str(cid).split(":")[-1]
+
+
+def _filter_by_entity_ids(
+    surreal_repo: SurrealDBRepository,
+    matching: set[str],
+    entity_ids: list[str],
+) -> set[str]:
+    """Narrow matching set to content linked to ALL given entity IDs."""
+    for entity_ref in [f"entity:{eid}" for eid in entity_ids]:
+        result = surreal_repo.db.query(
+            """
+            SELECT content_id FROM content_entity
+            WHERE entity_id = $entity_id AND content_id IN $content_ids
+            """,
+            {
+                "entity_id": entity_ref,
+                "content_ids": [f"content:{cid}" for cid in matching],
+            },
+        )
+        raw_items = surreal_repo._parse_query_result(result)
+        matched = {_extract_cid_from_item(item) for item in raw_items}
+        matching &= matched
+    return matching
+
+
+def _filter_by_entity_types(
+    surreal_repo: SurrealDBRepository,
+    matching: set[str],
+    entity_types: list[str],
+) -> set[str]:
+    """Narrow matching set to content that has entities of the given types."""
+    result = surreal_repo.db.query(
+        """
+        SELECT content_id FROM content_entity
+        WHERE content_id IN $content_ids
+        AND entity_id.entity_type IN $entity_types
+        """,
+        {
+            "content_ids": [f"content:{cid}" for cid in matching],
+            "entity_types": entity_types,
+        },
+    )
+    raw_items = surreal_repo._parse_query_result(result)
+    matched = {_extract_cid_from_item(item) for item in raw_items}
+    return matching & matched
+
+
+def _filter_by_topic_pattern(
+    surreal_repo: SurrealDBRepository,
+    matching: set[str],
+    topic_pattern: str,
+) -> set[str]:
+    """Narrow matching set to content discussing a single topic hierarchy pattern."""
+    hierarchy = [p.strip() for p in topic_pattern.split(">")]
+    result = surreal_repo.db.query(
+        """
+        SELECT content_id FROM content_entity
+        WHERE content_id IN $content_ids
+        AND entity_id.entity_type = 'topic'
+        AND entity_id.hierarchy CONTAINSALL $hierarchy
+        """,
+        {
+            "content_ids": [f"content:{cid}" for cid in matching],
+            "hierarchy": hierarchy,
+        },
+    )
+    raw_items = surreal_repo._parse_query_result(result)
+    matched = {_extract_cid_from_item(item) for item in raw_items}
+    return matching & matched
 
 
 async def _filter_by_entities(
@@ -287,83 +393,15 @@ async def _filter_by_entities(
 
     matching = set(content_ids)
 
-    # Filter by specific entity IDs
     if entity_ids:
-        entity_refs = [f"entity:{eid}" for eid in entity_ids]
-        for entity_ref in entity_refs:
-            result = surreal_repo.db.query(
-                """
-                SELECT content_id FROM content_entity
-                WHERE entity_id = $entity_id AND content_id IN $content_ids
-                """,
-                {
-                    "entity_id": entity_ref,
-                    "content_ids": [f"content:{cid}" for cid in matching],
-                },
-            )
-            raw_items = surreal_repo._parse_query_result(result)
-            matched_content = set()
-            for item in raw_items:
-                cid = item.get("content_id")
-                if hasattr(cid, "id"):
-                    cid = cid.id
-                else:
-                    cid = str(cid).split(":")[-1]
-                matched_content.add(cid)
-            matching &= matched_content
+        matching = _filter_by_entity_ids(surreal_repo, matching, entity_ids)
 
-    # Filter by entity types
     if entity_types and matching:
-        result = surreal_repo.db.query(
-            """
-            SELECT content_id FROM content_entity
-            WHERE content_id IN $content_ids
-            AND entity_id.entity_type IN $entity_types
-            """,
-            {
-                "content_ids": [f"content:{cid}" for cid in matching],
-                "entity_types": entity_types,
-            },
-        )
-        raw_items = surreal_repo._parse_query_result(result)
-        matched_content = set()
-        for item in raw_items:
-            cid = item.get("content_id")
-            if hasattr(cid, "id"):
-                cid = cid.id
-            else:
-                cid = str(cid).split(":")[-1]
-            matched_content.add(cid)
-        matching &= matched_content
+        matching = _filter_by_entity_types(surreal_repo, matching, entity_types)
 
-    # Filter by topics (partial hierarchy match)
     if topics and matching:
         for topic_pattern in topics:
-            # Parse topic hierarchy pattern (e.g., "AI > LLMs")
-            hierarchy = [p.strip() for p in topic_pattern.split(">")]
-
-            result = surreal_repo.db.query(
-                """
-                SELECT content_id FROM content_entity
-                WHERE content_id IN $content_ids
-                AND entity_id.entity_type = 'topic'
-                AND entity_id.hierarchy CONTAINSALL $hierarchy
-                """,
-                {
-                    "content_ids": [f"content:{cid}" for cid in matching],
-                    "hierarchy": hierarchy,
-                },
-            )
-            raw_items = surreal_repo._parse_query_result(result)
-            matched_content = set()
-            for item in raw_items:
-                cid = item.get("content_id")
-                if hasattr(cid, "id"):
-                    cid = cid.id
-                else:
-                    cid = str(cid).split(":")[-1]
-                matched_content.add(cid)
-            matching &= matched_content
+            matching = _filter_by_topic_pattern(surreal_repo, matching, topic_pattern)
 
     return matching
 
