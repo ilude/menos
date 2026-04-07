@@ -52,84 +52,102 @@ def get_channel_id(youtube: Any, channel_url: str) -> str | None:
         return None
 
 
+def _get_uploads_playlist_id(youtube: Any, channel_id: str) -> str | None:
+    """Return the uploads playlist ID for a channel, or None if not found."""
+    request = youtube.channels().list(part="contentDetails", id=channel_id)
+    response = request.execute()
+    if not response.get("items"):
+        print(f"No channel found with ID: {channel_id}")
+        return None
+    return response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+
+def _fetch_playlist_page(
+    youtube: Any, playlist_id: str, cutoff_date: datetime, page_token: str | None
+) -> tuple[list[str], dict[str, datetime], str | None]:
+    """Fetch one page of playlist items newer than cutoff_date.
+
+    Returns (video_ids, video_dates, next_page_token).
+    """
+    response = (
+        youtube.playlistItems()
+        .list(
+            part="snippet,contentDetails",
+            playlistId=playlist_id,
+            maxResults=50,
+            pageToken=page_token,
+        )
+        .execute()
+    )
+
+    video_ids: list[str] = []
+    video_dates: dict[str, datetime] = {}
+    for item in response.get("items", []):
+        vid = item["contentDetails"]["videoId"]
+        published_at = datetime.strptime(item["snippet"]["publishedAt"], "%Y-%m-%dT%H:%M:%SZ")
+        if published_at >= cutoff_date:
+            video_ids.append(vid)
+            video_dates[vid] = published_at
+        else:
+            return video_ids, video_dates, None  # ordered by date — stop early
+
+    return video_ids, video_dates, response.get("nextPageToken")
+
+
+def _fetch_video_details(
+    youtube: Any, video_ids: list[str], video_dates: dict[str, datetime]
+) -> list[dict[str, Any]]:
+    """Fetch detailed info for a batch of video IDs."""
+    response = (
+        youtube.videos()
+        .list(
+            part="snippet,statistics,contentDetails",
+            id=",".join(video_ids),
+        )
+        .execute()
+    )
+
+    results = []
+    for video in response.get("items", []):
+        vid = video["id"]
+        snippet = video["snippet"]
+        statistics = video.get("statistics", {})
+        results.append(
+            {
+                "title": snippet["title"],
+                "url": f"https://www.youtube.com/watch?v={vid}",
+                "upload_date": video_dates[vid].strftime("%Y-%m-%d"),
+                "view_count": statistics.get("viewCount", "0"),
+                "duration": video["contentDetails"]["duration"],
+                "description": snippet.get("description", "")[:200],
+            }
+        )
+    return results
+
+
 def get_channel_videos(
     youtube: Any,
     channel_id: str,
     cutoff_date: datetime,
 ) -> list[dict[str, Any]]:
     """Fetch all videos from a channel since the cutoff date."""
-    videos = []
-    next_page_token = None
-
+    videos: list[dict[str, Any]] = []
     try:
-        # Get the uploads playlist ID
-        request = youtube.channels().list(part="contentDetails", id=channel_id)
-        response = request.execute()
-
-        if not response.get("items"):
-            print(f"No channel found with ID: {channel_id}")
+        playlist_id = _get_uploads_playlist_id(youtube, channel_id)
+        if not playlist_id:
             return videos
 
-        uploads_playlist_id = (
-            response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
-        )
-
+        next_page_token: str | None = None
         while True:
-            playlist_request = youtube.playlistItems().list(
-                part="snippet,contentDetails",
-                playlistId=uploads_playlist_id,
-                maxResults=50,
-                pageToken=next_page_token,
+            video_ids, video_dates, next_page_token = _fetch_playlist_page(
+                youtube, playlist_id, cutoff_date, next_page_token
             )
-            playlist_response = playlist_request.execute()
-
-            video_ids = []
-            video_dates = {}
-
-            for item in playlist_response.get("items", []):
-                video_id = item["contentDetails"]["videoId"]
-                published_at = datetime.strptime(
-                    item["snippet"]["publishedAt"], "%Y-%m-%dT%H:%M:%SZ"
-                )
-
-                if published_at >= cutoff_date:
-                    video_ids.append(video_id)
-                    video_dates[video_id] = published_at
-                else:
-                    # Videos are ordered by date, so we can stop
-                    break
-
-            if not video_ids:
-                break
-
-            # Get detailed video information
-            videos_request = youtube.videos().list(
-                part="snippet,statistics,contentDetails",
-                id=",".join(video_ids),
-            )
-            videos_response = videos_request.execute()
-
-            for video in videos_response.get("items", []):
-                vid = video["id"]
-                snippet = video["snippet"]
-                statistics = video.get("statistics", {})
-                content_details = video["contentDetails"]
-
-                videos.append({
-                    "title": snippet["title"],
-                    "url": f"https://www.youtube.com/watch?v={vid}",
-                    "upload_date": video_dates[vid].strftime("%Y-%m-%d"),
-                    "view_count": statistics.get("viewCount", "0"),
-                    "duration": content_details["duration"],
-                    "description": snippet.get("description", "")[:200],
-                })
-
-            next_page_token = playlist_response.get("nextPageToken")
+            if video_ids:
+                videos.extend(_fetch_video_details(youtube, video_ids, video_dates))
             if not next_page_token or not video_ids:
                 break
 
         videos.sort(key=lambda x: x["upload_date"], reverse=True)
-
     except HttpError as e:
         print(f"YouTube API error: {e}")
 
@@ -156,19 +174,19 @@ def save_to_csv(videos: list[dict[str, Any]], filename: str) -> None:
 
 def main() -> None:
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Fetch YouTube channel videos and export to CSV"
-    )
+    parser = argparse.ArgumentParser(description="Fetch YouTube channel videos and export to CSV")
     parser.add_argument(
         "channel_url",
         help="YouTube channel URL (e.g., https://www.youtube.com/@ChannelName)",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         help="Output CSV filename (auto-generated from channel name if not provided)",
     )
     parser.add_argument(
-        "-m", "--months",
+        "-m",
+        "--months",
         type=int,
         default=12,
         help="Number of months to look back (default: 12)",

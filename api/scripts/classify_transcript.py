@@ -92,22 +92,18 @@ MODELS = [
 ]
 
 
+def _stringify_record_ids(row: dict) -> dict:
+    """Convert RecordID values in a row dict to strings."""
+    return {k: str(v.id) if hasattr(v, "id") else v for k, v in row.items()}
+
+
 def parse_results(result):
     """Parse SurrealDB v2 query results into a flat list of dicts."""
     if not result or not isinstance(result, list) or len(result) == 0:
         return []
-    if isinstance(result[0], dict) and "result" in result[0]:
-        raw_items = result[0]["result"]
-    else:
-        raw_items = result
-    items = []
-    for item in raw_items:
-        row = dict(item)
-        for key, value in row.items():
-            if hasattr(value, "id"):
-                row[key] = str(value.id)
-        items.append(row)
-    return items
+    first = result[0]
+    raw_items = first["result"] if isinstance(first, dict) and "result" in first else result
+    return [_stringify_record_ids(dict(item)) for item in raw_items]
 
 
 def get_latest_youtube() -> dict:
@@ -160,9 +156,7 @@ def build_provider(slug: str, provider_type: str, model_id: str):
         raise ValueError(f"Unknown provider type: {provider_type}")
 
 
-async def classify_with_model(
-    slug: str, provider, transcript: str, title: str
-) -> tuple[str, str]:
+async def classify_with_model(slug: str, provider, transcript: str, title: str) -> tuple[str, str]:
     """Run classification on a single model, return (slug, result_text)."""
     timeout = 300.0 if slug == "qwen3" else 120.0
     user_prompt = f"# Content Title: {title}\n\n# Transcript:\n\n{transcript}"
@@ -186,9 +180,7 @@ async def classify_with_model(
         await provider.close()
 
 
-def write_result(
-    video_id: str, slug: str, model_id: str, title: str, result_text: str
-) -> Path:
+def write_result(video_id: str, slug: str, model_id: str, title: str, result_text: str) -> Path:
     """Write classification result to a markdown file."""
     data_dir = Path(__file__).resolve().parent.parent.parent / "data"
     data_dir.mkdir(exist_ok=True)

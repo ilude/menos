@@ -30,9 +30,7 @@ async def list_videos(limit: int = 50, offset: int = 0) -> None:
         print(f"Showing: {offset + 1} to {min(offset + limit, total)}\n")
 
         # Get videos
-        videos, _ = await repo.list_content(
-            content_type="youtube", limit=limit, offset=offset
-        )
+        videos, _ = await repo.list_content(content_type="youtube", limit=limit, offset=offset)
 
         if not videos:
             print("No videos found.\n")
@@ -60,15 +58,19 @@ async def list_videos(limit: int = 50, offset: int = 0) -> None:
 
 def main() -> None:
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="List YouTube videos in SurrealDB"
-    )
+    parser = argparse.ArgumentParser(description="List YouTube videos in SurrealDB")
     parser.add_argument(
-        "--limit", "-l", type=int, default=50,
+        "--limit",
+        "-l",
+        type=int,
+        default=50,
         help="Maximum number of videos to show (default: 50)",
     )
     parser.add_argument(
-        "--offset", "-o", type=int, default=0,
+        "--offset",
+        "-o",
+        type=int,
+        default=0,
         help="Number of videos to skip (default: 0)",
     )
 

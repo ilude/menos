@@ -72,6 +72,42 @@ def list_objects(client: Minio, bucket: str) -> list[dict]:
     return objects
 
 
+def _copy_object(
+    source: Minio, dest: Minio, bucket: str, obj: dict, index: int, total: int, stats: dict
+) -> None:
+    """Copy a single object from source to dest, updating stats in-place."""
+    key = obj["key"]
+    size = obj["size"]
+    try:
+        try:
+            dest_stat = dest.stat_object(bucket, key)
+            if dest_stat.size == size:
+                logger.info("  [%d/%d] Skipping (exists): %s (%d bytes)", index, total, key, size)
+                stats["skipped"] += 1
+                return
+        except S3Error:
+            pass
+
+        response = source.get_object(bucket, key)
+        data = response.read()
+        response.close()
+        response.release_conn()
+
+        dest.put_object(
+            bucket,
+            key,
+            io.BytesIO(data),
+            length=len(data),
+            content_type=response.headers.get("Content-Type", "application/octet-stream"),
+        )
+        stats["copied"] += 1
+        stats["bytes"] += len(data)
+        logger.info("  [%d/%d] Copied: %s (%d bytes)", index, total, key, len(data))
+    except Exception as e:
+        stats["failed"] += 1
+        logger.error("  [%d/%d] Failed: %s -- %s", index, total, key, e)
+
+
 def migrate(
     source: Minio,
     dest: Minio,
@@ -83,7 +119,6 @@ def migrate(
     Returns a stats dict with counts and byte totals.
     """
     stats = {"copied": 0, "skipped": 0, "failed": 0, "bytes": 0}
-
     source_objects = list_objects(source, bucket)
     total = len(source_objects)
     logger.info("Found %d objects in source bucket '%s'", total, bucket)
@@ -95,55 +130,47 @@ def migrate(
         stats["bytes"] = sum(o["size"] for o in source_objects)
         return stats
 
-    # Ensure destination bucket exists
     if not dest.bucket_exists(bucket):
         logger.info("Creating destination bucket '%s'", bucket)
         dest.make_bucket(bucket)
 
     for i, obj in enumerate(source_objects, 1):
-        key = obj["key"]
-        size = obj["size"]
-        try:
-            # Check if object already exists at destination with same size
-            try:
-                dest_stat = dest.stat_object(bucket, key)
-                if dest_stat.size == size:
-                    logger.info(
-                        "  [%d/%d] Skipping (exists): %s (%d bytes)",
-                        i,
-                        total,
-                        key,
-                        size,
-                    )
-                    stats["skipped"] += 1
-                    continue
-            except S3Error:
-                pass  # Object does not exist at dest -- proceed with copy
-
-            # Download from source
-            response = source.get_object(bucket, key)
-            data = response.read()
-            response.close()
-            response.release_conn()
-
-            # Upload to destination
-            dest.put_object(
-                bucket,
-                key,
-                io.BytesIO(data),
-                length=len(data),
-                content_type=response.headers.get("Content-Type", "application/octet-stream"),
-            )
-
-            stats["copied"] += 1
-            stats["bytes"] += len(data)
-            logger.info("  [%d/%d] Copied: %s (%d bytes)", i, total, key, len(data))
-
-        except Exception as e:
-            stats["failed"] += 1
-            logger.error("  [%d/%d] Failed: %s -- %s", i, total, key, e)
+        _copy_object(source, dest, bucket, obj, i, total, stats)
 
     return stats
+
+
+def _check_missing_objects(src_keys: set, dst_keys: set) -> bool:
+    """Log missing destination objects and return False if any are missing."""
+    missing = src_keys - dst_keys
+    if missing:
+        logger.error("Missing %d objects in destination:", len(missing))
+        for key in sorted(missing):
+            logger.error("  %s", key)
+        return False
+    return True
+
+
+def _check_size_mismatches(src_keys: set, src_by_key: dict, dst_by_key: dict) -> bool:
+    """Log size mismatches and return False if any exist."""
+    mismatches = [
+        (key, src_by_key[key], dst_by_key[key])
+        for key in src_keys
+        if src_by_key[key] != dst_by_key[key]
+    ]
+    if mismatches:
+        logger.error("Size mismatches for %d objects:", len(mismatches))
+        for key, src_size, dst_size in mismatches:
+            logger.error("  %s: source=%d dest=%d", key, src_size, dst_size)
+        return False
+    return True
+
+
+def _index_objects(objects: list) -> tuple[set, dict]:
+    """Return (key_set, key->size dict) for a list of object dicts."""
+    keys = {o["key"] for o in objects}
+    by_key = {o["key"]: o["size"] for o in objects}
+    return keys, by_key
 
 
 def verify(source: Minio, dest: Minio, bucket: str) -> bool:
@@ -155,34 +182,16 @@ def verify(source: Minio, dest: Minio, bucket: str) -> bool:
     src_objects = list_objects(source, bucket)
     dst_objects = list_objects(dest, bucket)
 
-    src_keys = {o["key"] for o in src_objects}
-    dst_keys = {o["key"] for o in dst_objects}
+    src_keys, src_by_key = _index_objects(src_objects)
+    dst_keys, dst_by_key = _index_objects(dst_objects)
 
-    missing = src_keys - dst_keys
-    if missing:
-        logger.error("Missing %d objects in destination:", len(missing))
-        for key in sorted(missing):
-            logger.error("  %s", key)
+    if not _check_missing_objects(src_keys, dst_keys):
+        return False
+    if not _check_size_mismatches(src_keys, src_by_key, dst_by_key):
         return False
 
-    # Compare sizes
-    src_by_key = {o["key"]: o["size"] for o in src_objects}
-    dst_by_key = {o["key"]: o["size"] for o in dst_objects}
-    size_mismatches = []
-    for key in src_keys:
-        if src_by_key[key] != dst_by_key[key]:
-            size_mismatches.append(
-                (key, src_by_key[key], dst_by_key[key])
-            )
-
-    if size_mismatches:
-        logger.error("Size mismatches for %d objects:", len(size_mismatches))
-        for key, src_size, dst_size in size_mismatches:
-            logger.error("  %s: source=%d dest=%d", key, src_size, dst_size)
-        return False
-
-    src_total = sum(o["size"] for o in src_objects)
-    dst_total = sum(o["size"] for o in dst_objects)
+    src_total = sum(src_by_key.values())
+    dst_total = sum(dst_by_key.values())
     logger.info(
         "Verification passed: %d objects, %d bytes in source, %d bytes in dest",
         len(src_objects),
@@ -265,7 +274,9 @@ def main():
 
     logger.info(
         "Source: %s  Dest: %s  Bucket: %s",
-        args.source_endpoint, args.dest_endpoint, args.bucket,
+        args.source_endpoint,
+        args.dest_endpoint,
+        args.bucket,
     )
 
     start = time.monotonic()
@@ -276,7 +287,9 @@ def main():
     logger.info("Migration %s", "preview" if args.dry_run else "complete")
     logger.info(
         "Copied: %d  Skipped: %d  Failed: %d",
-        stats["copied"], stats["skipped"], stats["failed"],
+        stats["copied"],
+        stats["skipped"],
+        stats["failed"],
     )
     logger.info("Bytes transferred: %d", stats["bytes"])
     logger.info("Duration: %.1f seconds", elapsed)

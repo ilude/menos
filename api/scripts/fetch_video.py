@@ -99,6 +99,49 @@ def _format_number(n: int | None) -> str:
     return f"{n:,}"
 
 
+def _print_pipeline_fields(data: dict) -> None:
+    """Print each populated pipeline field (quality, summary, tags, etc.)."""
+    quality_tier = data.get("quality_tier")
+    quality_score = data.get("quality_score")
+    if quality_tier is not None:
+        score_str = f" ({quality_score}/100)" if quality_score is not None else ""
+        print(f"Quality: {quality_tier}{score_str}")
+    if data.get("summary"):
+        print(f"Summary: {data['summary']}")
+    if data.get("tags"):
+        print(f"Tags: {', '.join(data['tags'])}")
+    if data.get("topics"):
+        print(f"Topics: {', '.join(data['topics'])}")
+    if data.get("entities"):
+        print(f"Entities: {', '.join(data['entities'])}")
+    if data.get("chunk_count") is not None:
+        print(f"Chunks: {data['chunk_count']}")
+
+
+def _print_pipeline_results(data: dict) -> None:
+    """Print pipeline results section if any pipeline data exists."""
+    has_data = any(data.get(k) for k in ("quality_tier", "summary", "tags", "topics", "entities"))
+    if not has_data:
+        return
+    print("\n--- Pipeline Results ---")
+    _print_pipeline_fields(data)
+
+
+def _print_transcript(transcript: str | None, preview: bool) -> None:
+    """Print the transcript section."""
+    if not transcript:
+        print("\n--- No transcript available ---")
+        return
+    print("\n--- Transcript ---")
+    if preview:
+        text = transcript[:2000]
+        if len(transcript) > 2000:
+            text += f"\n\n... [truncated, {len(transcript):,} chars total]"
+        print(text)
+    else:
+        print(transcript)
+
+
 def _print_formatted(data: dict, preview: bool) -> None:
     """Print video data in human-readable format."""
     title = data.get("title", "Unknown")
@@ -115,53 +158,63 @@ def _print_formatted(data: dict, preview: bool) -> None:
     print(f"Duration: {duration} | Views: {views} | Likes: {likes}")
     print(f"Published: {published}")
     print(f"Status: {data.get('processing_status', 'unknown')}")
-
-    # Pipeline results
-    quality_tier = data.get("quality_tier")
-    quality_score = data.get("quality_score")
-    summary = data.get("summary")
-    tags = data.get("tags", [])
-    topics = data.get("topics", [])
-    entities = data.get("entities", [])
-    chunk_count = data.get("chunk_count")
-
-    if any([quality_tier, summary, tags, topics, entities]):
-        print("\n--- Pipeline Results ---")
-        if quality_tier is not None:
-            score_str = f" ({quality_score}/100)" if quality_score is not None else ""
-            print(f"Quality: {quality_tier}{score_str}")
-        if summary:
-            print(f"Summary: {summary}")
-        if tags:
-            print(f"Tags: {', '.join(tags)}")
-        if topics:
-            print(f"Topics: {', '.join(topics)}")
-        if entities:
-            print(f"Entities: {', '.join(entities)}")
-        if chunk_count is not None:
-            print(f"Chunks: {chunk_count}")
-
-    # Transcript
-    transcript = data.get("transcript")
-    if transcript:
-        print("\n--- Transcript ---")
-        if preview:
-            text = transcript[:2000]
-            if len(transcript) > 2000:
-                text += f"\n\n... [truncated, {len(transcript):,} chars total]"
-            print(text)
-        else:
-            print(transcript)
-    else:
-        print("\n--- No transcript available ---")
-
+    _print_pipeline_results(data)
+    _print_transcript(data.get("transcript"), preview)
     print()
 
 
-def main() -> None:
-    """Main entry point."""
-    sys.stdout.reconfigure(encoding="utf-8")
+def _fetch_response(
+    signer: "RequestSigner", base_url: str, host: str, path: str, timeout: float
+) -> httpx.Response:
+    """Make a signed GET, exit on connection error or non-success status."""
+    try:
+        response = _signed_get(signer, base_url, host, path, timeout)
+    except httpx.ConnectError as e:
+        print(f"Connection error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if response.status_code == 404:
+        print(f"Not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    if not response.is_success:
+        print(f"Error {response.status_code}: {response.text}", file=sys.stderr)
+        sys.exit(1)
+    return response
 
+
+def _handle_transcript_only(
+    signer, base_url: str, host: str, video_id: str, save: str | None, timeout: float
+) -> None:
+    """Fetch and output transcript-only mode, then exit."""
+    path = f"/api/v1/youtube/{video_id}/transcript"
+    response = _fetch_response(signer, base_url, host, path, timeout)
+    transcript = response.text
+    if save:
+        save_dir = Path(save)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out_path = save_dir / f"{video_id}_transcript.txt"
+        out_path.write_text(transcript, encoding="utf-8")
+        print(f"Saved transcript to {out_path}", file=sys.stderr)
+    else:
+        print(transcript)
+    sys.exit(0)
+
+
+def _save_metadata(data: dict, video_id: str, save_dir: Path) -> None:
+    """Save metadata JSON and transcript text files to save_dir."""
+    meta_path = save_dir / f"{video_id}_metadata.json"
+    meta_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Saved metadata to {meta_path}", file=sys.stderr)
+    transcript = data.get("transcript", "")
+    if transcript:
+        tx_path = save_dir / f"{video_id}_transcript.txt"
+        tx_path.write_text(transcript, encoding="utf-8")
+        print(f"Saved transcript to {tx_path}", file=sys.stderr)
+    else:
+        print("No transcript available to save.", file=sys.stderr)
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build and return the CLI argument parser."""
     parser = argparse.ArgumentParser(
         description="Fetch video transcript and metadata from the menos API",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -175,25 +228,13 @@ Examples:
   PYTHONPATH=. uv run python scripts/fetch_video.py Q7r--i9lLck --preview
         """,
     )
+    parser.add_argument("video", help="YouTube video ID or URL")
     parser.add_argument(
-        "video",
-        help="YouTube video ID or URL",
+        "--transcript-only", action="store_true", help="Fetch only the raw transcript text"
     )
+    parser.add_argument("--save", metavar="DIR", help="Save transcript and metadata to DIR")
     parser.add_argument(
-        "--transcript-only",
-        action="store_true",
-        help="Fetch only the raw transcript text",
-    )
-    parser.add_argument(
-        "--save",
-        metavar="DIR",
-        help="Save transcript and metadata to DIR",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        dest="json_output",
-        help="Output as JSON for piping",
+        "--json", action="store_true", dest="json_output", help="Output as JSON for piping"
     )
     parser.add_argument(
         "--preview",
@@ -206,13 +247,15 @@ Examples:
         help="Path to ed25519 private key (default: ~/.ssh/id_ed25519)",
     )
     parser.add_argument(
-        "--timeout",
-        type=float,
-        default=30,
-        help="Request timeout in seconds (default: 30)",
+        "--timeout", type=float, default=30, help="Request timeout in seconds (default: 30)"
     )
+    return parser
 
-    args = parser.parse_args()
+
+def main() -> None:
+    """Main entry point."""
+    sys.stdout.reconfigure(encoding="utf-8")
+    args = _build_arg_parser().parse_args()
     video_id = extract_video_id(args.video)
 
     try:
@@ -221,89 +264,25 @@ Examples:
         print(f"Failed to load signing key: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Transcript-only mode
     if args.transcript_only:
-        path = f"/api/v1/youtube/{video_id}/transcript"
-        try:
-            response = _signed_get(signer, base_url, host, path, args.timeout)
-        except httpx.ConnectError as e:
-            print(f"Connection error: {e}", file=sys.stderr)
-            sys.exit(1)
+        _handle_transcript_only(signer, base_url, host, video_id, args.save, args.timeout)
 
-        if response.status_code == 404:
-            print(f"Video '{video_id}' not found.", file=sys.stderr)
-            sys.exit(1)
-        if not response.is_success:
-            print(
-                f"Error {response.status_code}: {response.text}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        transcript = response.text
-        if args.save:
-            save_dir = Path(args.save)
-            save_dir.mkdir(parents=True, exist_ok=True)
-            out_path = save_dir / f"{video_id}_transcript.txt"
-            out_path.write_text(transcript, encoding="utf-8")
-            print(f"Saved transcript to {out_path}", file=sys.stderr)
-        else:
-            print(transcript)
-
-        sys.exit(0)
-
-    # Full metadata mode
-    path = f"/api/v1/youtube/{video_id}"
-    try:
-        response = _signed_get(signer, base_url, host, path, args.timeout)
-    except httpx.ConnectError as e:
-        print(f"Connection error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    if response.status_code == 404:
-        print(f"Video '{video_id}' not found.", file=sys.stderr)
-        sys.exit(1)
-    if not response.is_success:
-        print(
-            f"Error {response.status_code}: {response.text}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
+    response = _fetch_response(signer, base_url, host, f"/api/v1/youtube/{video_id}", args.timeout)
     try:
         data = response.json()
     except (json.JSONDecodeError, ValueError):
         print(f"Invalid JSON response: {response.text}", file=sys.stderr)
         sys.exit(1)
 
-    # Save mode
     if args.save:
         save_dir = Path(args.save)
         save_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save metadata JSON
-        meta_path = save_dir / f"{video_id}_metadata.json"
-        meta_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"Saved metadata to {meta_path}", file=sys.stderr)
-
-        # Save transcript text
-        transcript = data.get("transcript", "")
-        if transcript:
-            tx_path = save_dir / f"{video_id}_transcript.txt"
-            tx_path.write_text(transcript, encoding="utf-8")
-            print(f"Saved transcript to {tx_path}", file=sys.stderr)
-        else:
-            print("No transcript available to save.", file=sys.stderr)
-
-    # Output
-    if args.json_output:
+        _save_metadata(data, video_id, save_dir)
+        print(f"Fetched: {data.get('title', 'Unknown')}")
+    elif args.json_output:
         print(json.dumps(data, indent=2, ensure_ascii=False))
-    elif not args.save:
-        _print_formatted(data, args.preview)
     else:
-        # When saving, also print a brief summary to stdout
-        title = data.get("title", "Unknown")
-        print(f"Fetched: {title}")
+        _print_formatted(data, args.preview)
 
 
 if __name__ == "__main__":

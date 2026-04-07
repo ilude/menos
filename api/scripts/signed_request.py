@@ -23,8 +23,41 @@ def _fix_msys_path(path: str) -> str:
     return path
 
 
+def _parse_host(base_url: str) -> str:
+    """Extract host[:port] from a base URL."""
+    parsed = urlparse(base_url)
+    host = parsed.hostname
+    if parsed.port and parsed.port not in (80, 443):
+        host = f"{host}:{parsed.port}"
+    return host
+
+
+def _parse_body(raw: str) -> bytes:
+    """Validate and encode a JSON body string. Exits on invalid JSON."""
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON body: {e}", file=sys.stderr)
+        sys.exit(1)
+    return raw.encode()
+
+
+def _print_response(response: httpx.Response, verbose: bool) -> None:
+    """Print the response body and optional status line."""
+    content_type = response.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            print(json.dumps(response.json(), indent=2))
+        except (json.JSONDecodeError, ValueError):
+            print(response.text)
+    else:
+        print(response.text)
+
+    if verbose:
+        print(f"\n--- {response.status_code} {response.reason_phrase} ---", file=sys.stderr)
+
+
 def main():
-    # Disable MSYS path conversion for this process
     os.environ.setdefault("MSYS_NO_PATHCONV", "1")
 
     parser = argparse.ArgumentParser(description="Make signed HTTP requests to the menos API")
@@ -38,37 +71,20 @@ def main():
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show request details")
     parser.add_argument(
-        "--timeout",
-        type=float,
-        default=30,
-        help="Request timeout in seconds (default: 30)",
+        "--timeout", type=float, default=30, help="Request timeout in seconds (default: 30)"
     )
     args = parser.parse_args()
 
-    # Fix MSYS path mangling (already happened before env var takes effect)
     request_path = _fix_msys_path(args.path)
-
     base_url = settings.api_base_url
     method = args.method.upper()
     url = f"{base_url}{request_path}"
-    parsed = urlparse(base_url)
-    host = parsed.hostname
-    if parsed.port and parsed.port not in (80, 443):
-        host = f"{host}:{parsed.port}"
+    host = _parse_host(base_url)
 
-    body_bytes = None
-    if args.body:
-        # Validate JSON
-        try:
-            json.loads(args.body)
-        except json.JSONDecodeError as e:
-            print(f"Invalid JSON body: {e}", file=sys.stderr)
-            sys.exit(1)
-        body_bytes = args.body.encode()
+    body_bytes = _parse_body(args.body) if args.body else None
 
     signer = RequestSigner.from_file(args.key)
     sig_headers = signer.sign_request(method, request_path, body=body_bytes, host=host)
-
     headers = {**sig_headers}
     if body_bytes:
         headers["content-type"] = "application/json"
@@ -79,24 +95,8 @@ def main():
             print(f"  {k}: {v}", file=sys.stderr)
         print(file=sys.stderr)
 
-    response = httpx.request(
-        method, url, headers=headers, content=body_bytes, timeout=args.timeout
-    )
-
-    # Print response
-    content_type = response.headers.get("content-type", "")
-    if "application/json" in content_type:
-        try:
-            data = response.json()
-            print(json.dumps(data, indent=2))
-        except (json.JSONDecodeError, ValueError):
-            print(response.text)
-    else:
-        print(response.text)
-
-    if args.verbose:
-        print(f"\n--- {response.status_code} {response.reason_phrase} ---", file=sys.stderr)
-
+    response = httpx.request(method, url, headers=headers, content=body_bytes, timeout=args.timeout)
+    _print_response(response, args.verbose)
     sys.exit(0 if response.is_success else 1)
 
 
