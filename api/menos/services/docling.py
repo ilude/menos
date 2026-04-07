@@ -46,65 +46,60 @@ class DoclingClient:
         return DoclingResult(markdown=markdown, title=title)
 
 
-def _extract_markdown(data: object) -> str | None:
-    if isinstance(data, str):
-        return data
+_MARKDOWN_KEYS = ("markdown", "md", "md_content")
+_NESTED_KEYS = ("document", "documents", "output", "outputs", "data")
+_TITLE_NESTED_KEYS = ("result",) + _NESTED_KEYS
 
-    if isinstance(data, list):
-        for item in data:
-            markdown = _extract_markdown(item)
-            if markdown:
-                return markdown
-        return None
 
-    if not isinstance(data, dict):
-        return None
-
-    markdown = data.get("markdown") or data.get("md") or data.get("md_content")
-    if isinstance(markdown, str) and markdown.strip():
-        return markdown
-
-    if "result" in data:
-        nested = _extract_markdown(data["result"])
-        if nested:
-            return nested
-
-    for key in ("document", "documents", "output", "outputs", "data"):
+def _extract_markdown_from_dict(data: dict) -> str | None:
+    for key in _MARKDOWN_KEYS:
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    for key in ("result",) + _NESTED_KEYS:
         if key in data:
             nested = _extract_markdown(data[key])
             if nested:
                 return nested
-
     return None
+
+
+def _extract_markdown(data: object) -> str | None:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list):
+        return next((m for item in data if (m := _extract_markdown(item))), None)
+    if isinstance(data, dict):
+        return _extract_markdown_from_dict(data)
+    return None
+
+
+def _str_if_nonempty(val: object) -> str | None:
+    return val.strip() if isinstance(val, str) and val.strip() else None
+
+
+def _extract_title_from_dict(data: dict) -> str | None:
+    if result := _str_if_nonempty(data.get("title")):
+        return result
+    meta = data.get("metadata")
+    if isinstance(meta, dict):
+        if result := _str_if_nonempty(meta.get("title")):
+            return result
+    return next(
+        (
+            nested
+            for key in _TITLE_NESTED_KEYS
+            if key in data and (nested := _extract_title(data[key]))
+        ),
+        None,
+    )
 
 
 def _extract_title(data: object) -> str | None:
     if isinstance(data, list):
-        for item in data:
-            title = _extract_title(item)
-            if title:
-                return title
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    title = data.get("title")
-    if isinstance(title, str) and title.strip():
-        return title.strip()
-
-    metadata = data.get("metadata")
-    if isinstance(metadata, dict):
-        nested_title = metadata.get("title")
-        if isinstance(nested_title, str) and nested_title.strip():
-            return nested_title.strip()
-
-    for key in ("result", "document", "documents", "output", "outputs", "data"):
-        if key in data:
-            nested = _extract_title(data[key])
-            if nested:
-                return nested
-
+        return next((t for item in data if (t := _extract_title(item))), None)
+    if isinstance(data, dict):
+        return _extract_title_from_dict(data)
     return None
 
 

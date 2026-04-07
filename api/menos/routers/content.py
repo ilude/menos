@@ -173,6 +173,37 @@ async def list_tags(
     return TagList(tags=[Tag(name=t["name"], count=t["count"]) for t in tags_data])
 
 
+def _normalize_exclude_tags(exclude_tags: str | None) -> list[str] | None:
+    """Parse the raw exclude_tags query param into a list or None."""
+    if exclude_tags is None:
+        return None
+    if exclude_tags == "":
+        return []
+    return [t.strip() for t in exclude_tags.split(",") if t.strip()]
+
+
+def _parse_exclude_tags(exclude_tags: str | None, tags_list: list[str] | None) -> list[str] | None:
+    """Resolve effective exclude_tags, lifting 'test' exclusion when tags include 'test'."""
+    normalized = _normalize_exclude_tags(exclude_tags)
+    if not (tags_list and "test" in tags_list):
+        return normalized
+    base = normalized if normalized is not None else []
+    return [t for t in base if t != "test"]
+
+
+def _to_content_item(item: ContentMetadata, chunk_counts: dict) -> ContentItem:
+    """Convert a ContentMetadata record to a ContentItem response."""
+    item_id = item.id or ""
+    return ContentItem(
+        id=item_id,
+        content_type=item.content_type,
+        title=item.title,
+        created_at=item.created_at.isoformat() if item.created_at else "",
+        chunk_count=chunk_counts.get(item_id, 0),
+        metadata=item.metadata,
+    )
+
+
 @router.get("", response_model=ContentList)
 async def list_content(
     key_id: AuthenticatedKeyId,
@@ -193,26 +224,7 @@ async def list_content(
 ):
     """List stored content."""
     tags_list = [t.strip() for t in tags.split(",")] if tags else None
-
-    # Parse exclude_tags
-    exclude_tags_list: list[str] | None
-    if exclude_tags is None:
-        # Omitted -> defaults to ["test"] in storage layer
-        exclude_tags_list = None
-    elif exclude_tags == "":
-        # Empty string -> no exclusions
-        exclude_tags_list = []
-    else:
-        # Non-empty -> parse comma-separated values
-        exclude_tags_list = [t.strip() for t in exclude_tags.split(",") if t.strip()]
-
-    # If tags include "test", remove "test" from effective exclusions
-    effective_exclude_tags = exclude_tags_list
-    if tags_list and "test" in tags_list:
-        if effective_exclude_tags is None:
-            effective_exclude_tags = []
-        elif "test" in effective_exclude_tags:
-            effective_exclude_tags = [t for t in effective_exclude_tags if t != "test"]
+    effective_exclude_tags = _parse_exclude_tags(exclude_tags, tags_list)
 
     items, total = await surreal_repo.list_content(
         offset=offset,
@@ -223,20 +235,8 @@ async def list_content(
         order_by="created_at DESC",
     )
 
-    content_ids = [item.id for item in items if item.id]
-    chunk_counts = await surreal_repo.get_chunk_counts(content_ids)
-
-    content_items = [
-        ContentItem(
-            id=item.id or "",
-            content_type=item.content_type,
-            title=item.title,
-            created_at=item.created_at.isoformat() if item.created_at else "",
-            chunk_count=chunk_counts.get(item.id or "", 0),
-            metadata=item.metadata,
-        )
-        for item in items
-    ]
+    chunk_counts = await surreal_repo.get_chunk_counts([i.id for i in items if i.id])
+    content_items = [_to_content_item(item, chunk_counts) for item in items]
     return ContentList(items=content_items, total=total, offset=offset, limit=limit)
 
 
@@ -250,6 +250,44 @@ async def get_content_stats(
     return ContentStatsResponse(**stats)
 
 
+def _extract_pipeline_fields(unified: dict) -> tuple[list[str], list[str]]:
+    """Extract topics and entities from unified pipeline result dict."""
+    topics = [t["name"] for t in unified.get("topics", []) if isinstance(t, dict)]
+    entities = [e["name"] for e in unified.get("additional_entities", []) if isinstance(e, dict)]
+    return topics, entities
+
+
+def _iso(dt) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _build_content_detail(metadata: ContentMetadata) -> ContentDetailResponse:
+    """Build ContentDetailResponse from stored metadata."""
+    meta = metadata.metadata or {}
+    unified = meta.get("unified_result") or {}
+    topics, entities = _extract_pipeline_fields(unified)
+    return ContentDetailResponse(
+        id=metadata.id or "",
+        content_type=metadata.content_type,
+        title=metadata.title,
+        description=metadata.description,
+        mime_type=metadata.mime_type,
+        file_size=metadata.file_size,
+        file_path=metadata.file_path,
+        tags=metadata.tags,
+        created_at=_iso(metadata.created_at),
+        updated_at=_iso(metadata.updated_at),
+        processing_status=meta.get("processing_status"),
+        summary=unified.get("summary") or None,
+        quality_tier=unified.get("tier") or None,
+        quality_score=unified.get("quality_score") or None,
+        pipeline_tags=unified.get("tags", []),
+        topics=topics,
+        entities=entities,
+        metadata=metadata.metadata,
+    )
+
+
 @router.get("/{content_id}", response_model=ContentDetailResponse)
 async def get_content(
     content_id: str,
@@ -260,43 +298,72 @@ async def get_content(
     metadata = await surreal_repo.get_content(content_id)
     if not metadata:
         raise HTTPException(status_code=404, detail="Content not found")
+    return _build_content_detail(metadata)
 
-    # Extract pipeline results from unified_result
-    unified = (metadata.metadata or {}).get("unified_result") or {}
 
-    return ContentDetailResponse(
-        id=metadata.id or "",
-        content_type=metadata.content_type,
-        title=metadata.title,
-        description=metadata.description,
-        mime_type=metadata.mime_type,
-        file_size=metadata.file_size,
-        file_path=metadata.file_path,
-        tags=metadata.tags,
-        created_at=(
-            metadata.created_at.isoformat() if metadata.created_at else None
-        ),
-        updated_at=(
-            metadata.updated_at.isoformat() if metadata.updated_at else None
-        ),
-        processing_status=(metadata.metadata or {}).get(
-            "processing_status"
-        ),
-        summary=unified.get("summary") or None,
-        quality_tier=unified.get("tier") or None,
-        quality_score=unified.get("quality_score") or None,
-        pipeline_tags=unified.get("tags", []),
-        topics=[
-            t["name"]
-            for t in unified.get("topics", [])
-            if isinstance(t, dict)
-        ],
-        entities=[
-            e["name"]
-            for e in unified.get("additional_entities", [])
-            if isinstance(e, dict)
-        ],
-        metadata=metadata.metadata,
+def _apply_markdown_frontmatter(
+    file_content: bytes,
+    filename: str,
+    title: str | None,
+    tags: list[str] | None,
+) -> tuple[str | None, list[str] | None]:
+    """Parse frontmatter from a markdown file and merge with explicit title/tags."""
+    parser = FrontmatterParser()
+    _, fm = parser.parse(file_content)
+    resolved_title = title or parser.extract_title(fm, default=filename)
+    resolved_tags = parser.extract_tags(fm, explicit_tags=tags)
+    return resolved_title, resolved_tags
+
+
+async def _store_content(
+    meta: ContentMetadata,
+    content_id: str,
+    surreal_repo: SurrealDBRepository,
+) -> str:
+    """Create content record in SurrealDB, return the final content ID."""
+    created = await surreal_repo.create_content(meta)
+    return created.id or content_id
+
+
+async def _store_and_link(
+    file_content: bytes,
+    meta: ContentMetadata,
+    content_id: str,
+    is_markdown: bool,
+    surreal_repo: SurrealDBRepository,
+) -> tuple[ContentMetadata, str]:
+    """Store content in SurrealDB and extract links if markdown."""
+    final_content_id = await _store_content(meta, content_id, surreal_repo)
+    if is_markdown:
+        await _extract_and_store_links(
+            content_id=final_content_id,
+            content=file_content.decode("utf-8"),
+            surreal_repo=surreal_repo,
+        )
+    return meta, final_content_id
+
+
+async def _upload_and_build_meta(
+    file: UploadFile,
+    file_path: str,
+    content_type: str,
+    final_title: str | None,
+    final_tags: list[str] | None,
+    key_id: str,
+    minio_storage: MinIOStorage,
+) -> ContentMetadata:
+    """Upload file to MinIO and return populated ContentMetadata."""
+    file_size = await minio_storage.upload(
+        file_path, file.file, file.content_type or "application/octet-stream"
+    )
+    return ContentMetadata(
+        content_type=content_type,
+        title=final_title or file.filename,
+        mime_type=file.content_type or "application/octet-stream",
+        file_size=file_size,
+        file_path=file_path,
+        author=key_id,
+        tags=final_tags or [],
     )
 
 
@@ -314,61 +381,27 @@ async def create_content(
     """Upload new content."""
     content_id = str(uuid.uuid4())
     file_path = f"{content_type}/{content_id}/{file.filename}"
-
-    # Read file content for frontmatter parsing if markdown
     file_content = await file.read()
-    await file.seek(0)  # Reset for MinIO upload
+    await file.seek(0)
 
-    # Parse frontmatter from markdown files
-    frontmatter_metadata = {}
-    final_title = title
-    final_tags = tags
-
-    if file.filename and file.filename.endswith(".md"):
-        parser = FrontmatterParser()
-        _, frontmatter_metadata = parser.parse(file_content)
-
-        # Extract title from frontmatter if not provided explicitly
-        if not title:
-            final_title = parser.extract_title(frontmatter_metadata, default=file.filename)
-
-        # Merge tags from frontmatter and explicit parameter
-        final_tags = parser.extract_tags(frontmatter_metadata, explicit_tags=tags)
-
-    # Upload to MinIO
-    file_size = await minio_storage.upload(
-        file_path,
-        file.file,
-        file.content_type or "application/octet-stream",
-    )
-
-    # Store metadata in SurrealDB
-    metadata = ContentMetadata(
-        content_type=content_type,
-        title=final_title or file.filename,
-        mime_type=file.content_type or "application/octet-stream",
-        file_size=file_size,
-        file_path=file_path,
-        author=key_id,
-        tags=final_tags or [],
-    )
-    created = await surreal_repo.create_content(metadata)
-
-    # Extract and store links from markdown content
-    if file.filename and file.filename.endswith(".md"):
-        await _extract_and_store_links(
-            content_id=created.id or content_id,
-            content=file_content.decode("utf-8"),
-            surreal_repo=surreal_repo,
+    final_title, final_tags = title, tags
+    is_markdown = bool(file.filename and file.filename.endswith(".md"))
+    if is_markdown:
+        final_title, final_tags = _apply_markdown_frontmatter(
+            file_content, file.filename or "", title, tags
         )
 
-    # Submit to unified pipeline
-    text_content = file_content.decode("utf-8")
-    final_content_id = created.id or content_id
+    meta = await _upload_and_build_meta(
+        file, file_path, content_type, final_title, final_tags, key_id, minio_storage
+    )
+    metadata, final_content_id = await _store_and_link(
+        file_content, meta, content_id, is_markdown, surreal_repo
+    )
+
     resource_key = generate_resource_key(content_type, final_content_id)
     job = await orchestrator.submit(
         final_content_id,
-        text_content,
+        file_content.decode("utf-8"),
         content_type,
         metadata.title or "Untitled",
         resource_key,
@@ -377,7 +410,7 @@ async def create_content(
     return ContentCreateResponse(
         id=final_content_id,
         file_path=file_path,
-        file_size=file_size,
+        file_size=meta.file_size,
         job_id=job.id if job else None,
     )
 

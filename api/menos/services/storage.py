@@ -203,6 +203,26 @@ class SurrealDBRepository:
             return self._parse_content(result[0])
         return None
 
+    @staticmethod
+    def _build_content_filters(
+        content_type: str | None,
+        tags: list[str] | None,
+        exclude_tags: list[str],
+    ) -> tuple[list[str], dict]:
+        """Build WHERE clauses and params for content filters."""
+        clauses: list[str] = []
+        params: dict = {}
+        if content_type:
+            clauses.append("content_type = $content_type")
+            params["content_type"] = content_type
+        if tags:
+            clauses.append("tags CONTAINSANY $tags")
+            params["tags"] = tags
+        if exclude_tags:
+            clauses.append("tags CONTAINSNONE $exclude_tags")
+            params["exclude_tags"] = exclude_tags
+        return clauses, params
+
     async def list_content(
         self,
         offset: int = 0,
@@ -212,57 +232,29 @@ class SurrealDBRepository:
         exclude_tags: list[str] | None = None,
         order_by: str | None = None,
     ) -> tuple[list[ContentMetadata], int]:
-        """List content metadata.
-
-        Args:
-            offset: Query offset
-            limit: Query limit
-            content_type: Optional filter by content type
-            tags: Optional filter by tags (can have any specified tag)
-            exclude_tags: Optional tags to exclude (defaults to ["test"] if None)
-            order_by: Optional ORDER BY clause (e.g. "created_at DESC")
-
-        Returns:
-            Tuple of (content list, total count)
-        """
-        # Default exclude_tags to ["test"] if None, respect explicit empty list
-        if exclude_tags is None:
-            exclude_tags = ["test"]
-
-        # If tags filter includes a tag that's in exclude_tags, remove it from exclusions
-        # (allows searching for test content via tags=test without being blocked)
-        if tags and exclude_tags:
-            exclude_tags = [tag for tag in exclude_tags if tag not in tags]
-
-        # Build parameterized query
-        params: dict = {"limit": limit, "offset": offset}
-        where_clauses = []
-        if content_type:
-            where_clauses.append("content_type = $content_type")
-            params["content_type"] = content_type
-        if tags:
-            where_clauses.append("tags CONTAINSANY $tags")
-            params["tags"] = tags
-        if exclude_tags:
-            where_clauses.append("tags CONTAINSNONE $exclude_tags")
-            params["exclude_tags"] = exclude_tags
-
-        where_clause = ""
-        if where_clauses:
-            where_clause = " WHERE " + " AND ".join(where_clauses)
-
-        order_clause = ""
-        if order_by:
-            order_clause = f" ORDER BY {order_by}"
-
+        """List content metadata."""
+        effective_exclude = self._effective_exclude_tags(tags, exclude_tags)
+        clauses, filter_params = self._build_content_filters(content_type, tags, effective_exclude)
+        params: dict = {"limit": limit, "offset": offset, **filter_params}
+        where_clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        order_clause = f" ORDER BY {order_by}" if order_by else ""
         result = self.db.query(
-            f"SELECT * FROM content{where_clause}{order_clause}"
-            " LIMIT $limit START $offset",
+            f"SELECT * FROM content{where_clause}{order_clause} LIMIT $limit START $offset",
             params,
         )
         raw_items = self._parse_query_result(result)
         items = [self._parse_content(item) for item in raw_items]
         return items, len(items)
+
+    @staticmethod
+    def _effective_exclude_tags(
+        tags: list[str] | None, exclude_tags: list[str] | None
+    ) -> list[str]:
+        """Compute effective exclude_tags, removing any tags that are explicitly included."""
+        effective = ["test"] if exclude_tags is None else exclude_tags
+        if tags and effective:
+            effective = [t for t in effective if t not in tags]
+        return effective
 
     async def get_content_stats(self) -> dict:
         """Get aggregate content statistics."""
@@ -452,6 +444,32 @@ class SurrealDBRepository:
 
         return [{"name": name, "count": count} for name, count in sorted_tags]
 
+    @staticmethod
+    def _count_tag_pairs(raw_items: list[dict]) -> dict[tuple[str, str], int]:
+        """Count co-occurring tag pairs across content items."""
+        pair_counts: dict[tuple[str, str], int] = {}
+        for item in raw_items:
+            tags = item.get("tags", [])
+            if not isinstance(tags, list):
+                continue
+            unique = sorted({t for t in tags if isinstance(t, str) and t})
+            for i, left in enumerate(unique):
+                for right in unique[i + 1 :]:
+                    pair_counts[(left, right)] = pair_counts.get((left, right), 0) + 1
+        return pair_counts
+
+    @staticmethod
+    def _group_by_tag(
+        pair_counts: dict[tuple[str, str], int], min_count: int
+    ) -> dict[str, list[tuple[str, int]]]:
+        """Group pair counts by each tag, filtering below min_count."""
+        by_tag: dict[str, list[tuple[str, int]]] = {}
+        for (left, right), count in pair_counts.items():
+            if count >= min_count:
+                by_tag.setdefault(left, []).append((right, count))
+                by_tag.setdefault(right, []).append((left, count))
+        return by_tag
+
     async def get_tag_cooccurrence(
         self,
         min_count: int = 3,
@@ -466,33 +484,18 @@ class SurrealDBRepository:
         if not raw_items:
             return {}
 
-        pair_counts: dict[tuple[str, str], int] = {}
-        for item in raw_items:
-            tags = item.get("tags", [])
-            if not isinstance(tags, list):
-                continue
-            unique_tags = sorted({tag for tag in tags if isinstance(tag, str) and tag})
-            for i, left in enumerate(unique_tags):
-                for right in unique_tags[i + 1 :]:
-                    pair_counts[(left, right)] = pair_counts.get((left, right), 0) + 1
-
+        pair_counts = self._count_tag_pairs(raw_items)
         if not pair_counts:
             return {}
 
-        by_tag: dict[str, list[tuple[str, int]]] = {}
-        for (left, right), count in pair_counts.items():
-            if count < min_count:
-                continue
-            by_tag.setdefault(left, []).append((right, count))
-            by_tag.setdefault(right, []).append((left, count))
-
+        by_tag = self._group_by_tag(pair_counts, min_count)
         if not by_tag:
             return {}
 
         output: dict[str, list[str]] = {}
         for tag in sorted(by_tag):
             related = sorted(by_tag[tag], key=lambda item: (-item[1], item[0]))
-            related_tags = [related_tag for related_tag, _ in related[:limit]]
+            related_tags = [t for t, _ in related[:limit]]
             if related_tags:
                 output[tag] = related_tags
         return output
@@ -636,10 +639,7 @@ class SurrealDBRepository:
         Returns:
             List of content metadata ordered by created_at DESC
         """
-        query = (
-            "SELECT * FROM content "
-            "WHERE metadata.parent_content_id = $parent_id"
-        )
+        query = "SELECT * FROM content WHERE metadata.parent_content_id = $parent_id"
         params: dict = {"parent_id": parent_content_id}
         if content_type:
             query += " AND content_type = $content_type"
@@ -734,64 +734,47 @@ class SurrealDBRepository:
         Returns:
             Tuple of (nodes, edges) where nodes are ContentMetadata and edges are LinkModel
         """
-        # Default exclude_tags to ["test"] if None, respect explicit empty list
-        if exclude_tags is None:
-            exclude_tags = ["test"]
+        effective_exclude = ["test"] if exclude_tags is None else exclude_tags
+        clauses, filter_params = self._build_content_filters(content_type, tags, effective_exclude)
+        params: dict = {"limit": limit, **filter_params}
+        where_clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-        # Build content query with filters
-        params: dict = {"limit": limit}
-        where_clauses = []
-        if content_type:
-            where_clauses.append("content_type = $content_type")
-            params["content_type"] = content_type
-        if tags:
-            where_clauses.append("tags CONTAINSANY $tags")
-            params["tags"] = tags
-        if exclude_tags:
-            where_clauses.append("tags CONTAINSNONE $exclude_tags")
-            params["exclude_tags"] = exclude_tags
-
-        where_clause = ""
-        if where_clauses:
-            where_clause = " WHERE " + " AND ".join(where_clauses)
-
-        # Get content nodes
         content_result = self.db.query(
             f"SELECT * FROM content{where_clause} LIMIT $limit",
             params,
         )
+        nodes, node_ids = self._collect_graph_nodes(self._parse_query_result(content_result))
+        edges = self._collect_graph_edges(node_ids)
+        return nodes, edges
 
-        nodes = []
-        node_ids = set()
-
-        raw_items = self._parse_query_result(content_result)
+    def _collect_graph_nodes(self, raw_items: list[dict]) -> tuple[list[ContentMetadata], set[str]]:
+        """Parse raw content rows into graph nodes, returning (nodes, node_ids)."""
+        nodes: list[ContentMetadata] = []
+        node_ids: set[str] = set()
         for item in raw_items:
             node = self._parse_content(item)
             if node.id:
                 nodes.append(node)
                 node_ids.add(node.id)
+        return nodes, node_ids
 
-        # Get all links where both source and target are in our node set
-        edges = []
-        if node_ids:
-            # Build query for links between nodes
-            node_refs = [RecordID("content", nid) for nid in node_ids]
-            link_result = self.db.query(
-                "SELECT * FROM link WHERE source IN $ids OR target IN $ids",
-                {"ids": node_refs},
-            )
-
-            raw_links = self._parse_query_result(link_result)
-            for item in raw_links:
-                if "source" not in item:
-                    continue
-                link = self._parse_link(item)
-                # Only include links where both source and target are in node set
-                # (or target is None for unresolved links)
-                if link.source in node_ids and (link.target is None or link.target in node_ids):
-                    edges.append(link)
-
-        return nodes, edges
+    def _collect_graph_edges(self, node_ids: set[str]) -> list[LinkModel]:
+        """Fetch links whose source or target is in node_ids, filtered to within-set links."""
+        if not node_ids:
+            return []
+        node_refs = [RecordID("content", nid) for nid in node_ids]
+        link_result = self.db.query(
+            "SELECT * FROM link WHERE source IN $ids OR target IN $ids",
+            {"ids": node_refs},
+        )
+        edges: list[LinkModel] = []
+        for item in self._parse_query_result(link_result):
+            if "source" not in item:
+                continue
+            link = self._parse_link(item)
+            if link.source in node_ids and (link.target is None or link.target in node_ids):
+                edges.append(link)
+        return edges
 
     async def get_neighborhood(
         self,
@@ -812,49 +795,48 @@ class SurrealDBRepository:
         if not center_node:
             return [], []
 
-        # Track visited nodes and edges
         visited_nodes: dict[str, ContentMetadata] = {content_id: center_node}
         all_edges: dict[str, LinkModel] = {}
         current_layer = {content_id}
 
-        # Traverse depth layers
         for _ in range(depth):
-            next_layer = set()
-
+            next_layer: set[str] = set()
             for node_id in current_layer:
-                # Get forward links (outgoing)
-                outgoing = await self.get_links_by_source(node_id)
-                for link in outgoing:
-                    all_edges[link.id or ""] = link
-
-                    # Add target node if not visited
-                    if link.target and link.target not in visited_nodes:
-                        target_node = await self.get_content(link.target)
-                        if target_node:
-                            visited_nodes[link.target] = target_node
-                            next_layer.add(link.target)
-
-                # Get backlinks (incoming)
-                incoming = await self.get_links_by_target(node_id)
-                for link in incoming:
-                    all_edges[link.id or ""] = link
-
-                    # Add source node if not visited
-                    if link.source and link.source not in visited_nodes:
-                        source_node = await self.get_content(link.source)
-                        if source_node:
-                            visited_nodes[link.source] = source_node
-                            next_layer.add(link.source)
-
+                await self._expand_neighborhood_node(node_id, visited_nodes, all_edges, next_layer)
             current_layer = next_layer
             if not current_layer:
                 break
 
-        # Convert to lists
-        nodes = list(visited_nodes.values())
-        edges = list(all_edges.values())
+        return list(visited_nodes.values()), list(all_edges.values())
 
-        return nodes, edges
+    async def _expand_neighborhood_node(
+        self,
+        node_id: str,
+        visited_nodes: dict[str, ContentMetadata],
+        all_edges: dict[str, LinkModel],
+        next_layer: set[str],
+    ) -> None:
+        """Expand one node's outgoing and incoming links into visited sets."""
+        for link in await self.get_links_by_source(node_id):
+            all_edges[link.id or ""] = link
+            await self._visit_neighbor(link.target, visited_nodes, next_layer)
+
+        for link in await self.get_links_by_target(node_id):
+            all_edges[link.id or ""] = link
+            await self._visit_neighbor(link.source, visited_nodes, next_layer)
+
+    async def _visit_neighbor(
+        self,
+        neighbor_id: str | None,
+        visited_nodes: dict[str, ContentMetadata],
+        next_layer: set[str],
+    ) -> None:
+        """Fetch and register a neighbor node if not already visited."""
+        if neighbor_id and neighbor_id not in visited_nodes:
+            node = await self.get_content(neighbor_id)
+            if node:
+                visited_nodes[neighbor_id] = node
+                next_layer.add(neighbor_id)
 
     async def get_related_content(
         self,
@@ -920,48 +902,49 @@ class SurrealDBRepository:
             },
         )
         raw_items = self._parse_query_result(result)
-
-        def parse_created_at(value) -> datetime:
-            if isinstance(value, datetime):
-                return value
-            if isinstance(value, str):
-                try:
-                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
-            return datetime.min.replace(tzinfo=UTC)
-
         related_items: list[tuple[RelatedContent, datetime]] = []
         for item in raw_items:
-            parsed_id = self._stringify_record_id(item.get("content_id"))
-            if parsed_id in {content_id, f"content:{content_id}"}:
-                continue
-
-            shared_entity_count = int(item.get("shared_entity_count", 0) or 0)
-            if shared_entity_count < 2:
-                continue
-
-            shared_entities = item.get("shared_entities")
-            if not isinstance(shared_entities, list):
-                shared_entities = []
-
-            related = RelatedContent(
-                content_id=parsed_id,
-                title=item.get("title") or "",
-                content_type=item.get("content_type") or "",
-                shared_entity_count=shared_entity_count,
-                shared_entities=[str(entity) for entity in shared_entities],
-            )
-            related_items.append((related, parse_created_at(item.get("created_at"))))
-
+            entry = self._parse_related_item(item, content_id)
+            if entry:
+                related_items.append(entry)
         related_items.sort(
-            key=lambda item: (
-                -item[0].shared_entity_count,
-                -item[1].timestamp(),
-                item[0].content_id,
-            )
+            key=lambda x: (-x[0].shared_entity_count, -x[1].timestamp(), x[0].content_id)
         )
         return [related for related, _ in related_items]
+
+    @staticmethod
+    def _parse_created_at(value) -> datetime:
+        """Parse a datetime value from a SurrealDB result field."""
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        return datetime.min.replace(tzinfo=UTC)
+
+    def _parse_related_item(
+        self, item: dict, source_content_id: str
+    ) -> tuple[RelatedContent, datetime] | None:
+        """Parse one raw related-content row; returns None if it should be skipped."""
+        parsed_id = self._stringify_record_id(item.get("content_id"))
+        if parsed_id in {source_content_id, f"content:{source_content_id}"}:
+            return None
+        shared_entity_count = int(item.get("shared_entity_count", 0) or 0)
+        if shared_entity_count < 2:
+            return None
+        shared_entities = item.get("shared_entities")
+        if not isinstance(shared_entities, list):
+            shared_entities = []
+        related = RelatedContent(
+            content_id=parsed_id,
+            title=item.get("title") or "",
+            content_type=item.get("content_type") or "",
+            shared_entity_count=shared_entity_count,
+            shared_entities=[str(e) for e in shared_entities],
+        )
+        return related, self._parse_created_at(item.get("created_at"))
 
     # ==================== Record Parsing Helpers ====================
 

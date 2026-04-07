@@ -184,76 +184,56 @@ class LLMRerankerProvider:
         """
         self.llm_provider = llm_provider
 
+    def _fallback_ranking(self, documents: list[str]) -> list[RankedDocument]:
+        return [
+            RankedDocument(text=doc, original_index=i, score=1.0) for i, doc in enumerate(documents)
+        ]
+
+    def _unwrap_markdown_json(self, response: str) -> str:
+        """Strip markdown code fences from an LLM response if present."""
+        response = response.strip()
+        if response.startswith("```"):
+            lines = response.split("\n")
+            response = "\n".join(lines[1:-1]) if len(lines) > 2 else response
+        return response
+
+    def _parse_rankings(self, response: str, documents: list[str]) -> list[RankedDocument]:
+        """Parse LLM JSON rankings into RankedDocument list; returns [] on failure."""
+        data = json.loads(self._unwrap_markdown_json(response))
+        ranked = []
+        for ranking in data.get("rankings", []):
+            idx = ranking.get("index")
+            if idx is not None and 0 <= idx < len(documents):
+                ranked.append(
+                    RankedDocument(
+                        text=documents[idx],
+                        original_index=idx,
+                        score=float(ranking.get("score", 0.0)),
+                    )
+                )
+        if ranked:
+            ranked.sort(key=lambda x: x.score, reverse=True)
+        return ranked
+
     async def rank(self, query: str, documents: list[str]) -> list[RankedDocument]:
-        """Rank documents using LLM-based scoring.
-
-        Args:
-            query: Search query
-            documents: List of document texts to rank
-
-        Returns:
-            List of ranked documents, sorted by descending score.
-            Falls back to original order (all scores=1.0) on parse errors.
-        """
+        """Rank documents using LLM-based scoring. Falls back to original order on errors."""
         if not documents:
             return []
-
-        # Format documents for prompt
         doc_list = "\n".join(
             f"{i}. {doc[:200]}..." if len(doc) > 200 else f"{i}. {doc}"
             for i, doc in enumerate(documents)
         )
-
         prompt = RERANK_PROMPT.format(query=query, documents=doc_list)
-
         try:
-            # Get LLM response
             response = await self.llm_provider.generate(
-                prompt=prompt,
-                temperature=0.0,  # Deterministic for ranking
-                timeout=30.0,
+                prompt=prompt, temperature=0.0, timeout=30.0
             )
-
-            # Parse JSON response
-            # LLMs sometimes wrap JSON in markdown code blocks
-            response = response.strip()
-            if response.startswith("```"):
-                # Extract JSON from markdown
-                lines = response.split("\n")
-                response = "\n".join(lines[1:-1]) if len(lines) > 2 else response
-
-            data = json.loads(response)
-            rankings = data.get("rankings", [])
-
-            # Build ranked documents
-            ranked = []
-            for ranking in rankings:
-                idx = ranking.get("index")
-                score = ranking.get("score", 0.0)
-
-                if idx is not None and 0 <= idx < len(documents):
-                    ranked.append(
-                        RankedDocument(
-                            text=documents[idx],
-                            original_index=idx,
-                            score=float(score),
-                        )
-                    )
-
-            # If we got valid rankings, return them
+            ranked = self._parse_rankings(response, documents)
             if ranked:
-                # Sort by score descending
-                ranked.sort(key=lambda x: x.score, reverse=True)
                 return ranked
-
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            # Parse error - fall through to original order
             pass
-
-        # Fallback: return original order
-        return [
-            RankedDocument(text=doc, original_index=i, score=1.0) for i, doc in enumerate(documents)
-        ]
+        return self._fallback_ranking(documents)
 
     async def close(self) -> None:
         """Close and cleanup resources."""

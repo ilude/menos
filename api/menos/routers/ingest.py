@@ -79,15 +79,14 @@ async def ingest_url(
     detected = detector.classify_url(raw_url)
 
     if detected.url_type == "youtube":
+        video_id = detected.extracted_id or youtube_service.extract_video_id(raw_url)
+        resource_key = generate_resource_key("youtube", video_id)
         return await _ingest_youtube(
-            url=raw_url,
+            video_id=video_id,
             key_id=key_id,
-            youtube_service=youtube_service,
-            metadata_service=metadata_service,
-            minio_storage=minio_storage,
-            surreal_repo=surreal_repo,
+            resource_key=resource_key,
+            svc=(youtube_service, metadata_service, minio_storage, surreal_repo),
             orchestrator=orchestrator,
-            detected_video_id=detected.extracted_id,
             tags=tags,
         )
 
@@ -128,76 +127,100 @@ def _has_incomplete_metadata(existing: ContentMetadata, video_id: str) -> bool:
     return False
 
 
+def _yt_metadata_fields(yt_metadata: YouTubeMetadata | None) -> dict:
+    """Extract YouTube API metadata fields (all None/empty when metadata unavailable)."""
+    if yt_metadata is None:
+        return {
+            "description": None,
+            "description_urls": [],
+            "channel_id": None,
+            "channel_title": None,
+            "published_at": None,
+            "duration": None,
+            "duration_seconds": None,
+            "view_count": None,
+            "like_count": None,
+            "tags": [],
+            "thumbnails": {},
+            "fetched_at": None,
+        }
+    return {
+        "description": yt_metadata.description,
+        "description_urls": yt_metadata.description_urls,
+        "channel_id": yt_metadata.channel_id,
+        "channel_title": yt_metadata.channel_title,
+        "published_at": yt_metadata.published_at,
+        "duration": yt_metadata.duration_formatted,
+        "duration_seconds": yt_metadata.duration_seconds,
+        "view_count": yt_metadata.view_count,
+        "like_count": yt_metadata.like_count,
+        "tags": yt_metadata.tags,
+        "thumbnails": yt_metadata.thumbnails,
+        "fetched_at": yt_metadata.fetched_at,
+    }
+
+
 def _build_minio_metadata(
-    *,
     content_id: str,
     video_id: str,
     title: str,
     yt_metadata: YouTubeMetadata | None,
-    language: str,
-    segment_count: int,
-    transcript_length: int,
-    file_size: int,
-    author: str | None,
-    created_at: str | None,
+    transcript_info: tuple[str, int, int],
+    file_info: tuple[int, str | None, str | None],
 ) -> dict:
-    """Build metadata.json dictionary for MinIO storage."""
+    """Build metadata.json dictionary for MinIO storage.
+
+    Args:
+        transcript_info: (language, segment_count, transcript_length)
+        file_info: (file_size, author, created_at)
+    """
+    language, segment_count, transcript_length = transcript_info
+    file_size, author, created_at = file_info
     return {
         "id": content_id,
         "video_id": video_id,
         "title": title,
-        "description": yt_metadata.description if yt_metadata else None,
-        "description_urls": yt_metadata.description_urls if yt_metadata else [],
-        "channel_id": yt_metadata.channel_id if yt_metadata else None,
-        "channel_title": yt_metadata.channel_title if yt_metadata else None,
-        "published_at": yt_metadata.published_at if yt_metadata else None,
-        "duration": yt_metadata.duration_formatted if yt_metadata else None,
-        "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
-        "view_count": yt_metadata.view_count if yt_metadata else None,
-        "like_count": yt_metadata.like_count if yt_metadata else None,
-        "tags": yt_metadata.tags if yt_metadata else [],
-        "thumbnails": yt_metadata.thumbnails if yt_metadata else {},
+        **_yt_metadata_fields(yt_metadata),
         "language": language,
         "segment_count": segment_count,
         "transcript_length": transcript_length,
         "file_size": file_size,
         "author": author,
         "created_at": created_at,
-        "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
     }
 
 
-async def _ingest_youtube(
-    url: str,
-    key_id: str,
-    youtube_service: YouTubeService,
-    metadata_service: YouTubeMetadataService,
-    minio_storage: MinIOStorage,
+async def _resolve_existing_youtube(
+    video_id: str,
+    resource_key: str,
     surreal_repo: SurrealDBRepository,
-    orchestrator: PipelineOrchestrator,
-    detected_video_id: str,
-    tags: list[str] | None = None,
-) -> IngestResponse:
-    video_id = detected_video_id or youtube_service.extract_video_id(url)
-    resource_key = generate_resource_key("youtube", video_id)
-
+) -> ContentMetadata | None:
+    """Look up an existing YouTube record by resource_key, falling back to video_id."""
     existing = await surreal_repo.find_content_by_resource_key(resource_key)
-
-    # Fallback: check by video_id for old records missing resource_key
     if existing is None:
         existing = await surreal_repo.find_content_by_video_id(video_id)
         if existing:
-            # Backfill resource_key so future lookups use the fast path
             surreal_repo.db.query(
-                "UPDATE content SET metadata.resource_key = $resource_key "
-                "WHERE id = $id",
+                "UPDATE content SET metadata.resource_key = $resource_key WHERE id = $id",
                 {
                     "resource_key": resource_key,
                     "id": RecordID("content", str(existing.id).split(":")[-1]),
                 },
             )
+    return existing
 
-    # Return early only if record exists AND has complete metadata
+
+async def _ingest_youtube(
+    video_id: str,
+    key_id: str,
+    resource_key: str,
+    svc: tuple[YouTubeService, YouTubeMetadataService, MinIOStorage, SurrealDBRepository],
+    orchestrator: PipelineOrchestrator,
+    tags: list[str] | None = None,
+) -> IngestResponse:
+    youtube_service, metadata_service, minio_storage, surreal_repo = svc
+    existing = await _resolve_existing_youtube(video_id, resource_key, surreal_repo)
+
     if existing and existing.id and not _has_incomplete_metadata(existing, video_id):
         return IngestResponse(
             content_id=existing.id,
@@ -206,7 +229,6 @@ async def _ingest_youtube(
             job_id=None,
         )
 
-    # Backfill metadata for existing record with incomplete YouTube metadata
     if existing and existing.id:
         return await _backfill_youtube_metadata(
             video_id=video_id,
@@ -216,17 +238,37 @@ async def _ingest_youtube(
             surreal_repo=surreal_repo,
         )
 
-    # New video ingestion flow
     return await _ingest_new_youtube(
         video_id=video_id,
         key_id=key_id,
         resource_key=resource_key,
-        youtube_service=youtube_service,
-        metadata_service=metadata_service,
-        minio_storage=minio_storage,
-        surreal_repo=surreal_repo,
+        svc=(youtube_service, metadata_service, minio_storage, surreal_repo),
         orchestrator=orchestrator,
         tags=tags,
+    )
+
+
+def _build_updated_metadata(existing_meta: dict, yt_metadata: YouTubeMetadata) -> dict:
+    """Merge fetched YouTube metadata fields into existing content metadata."""
+    return {
+        **existing_meta,
+        "published_at": yt_metadata.published_at,
+        "fetched_at": yt_metadata.fetched_at,
+        "channel_id": yt_metadata.channel_id,
+        "channel_title": yt_metadata.channel_title,
+        "duration_seconds": yt_metadata.duration_seconds,
+        "view_count": yt_metadata.view_count,
+        "like_count": yt_metadata.like_count,
+        "description_urls": yt_metadata.description_urls,
+    }
+
+
+def _existing_ingest_response(existing: ContentMetadata, video_id: str) -> IngestResponse:
+    return IngestResponse(
+        content_id=existing.id,
+        content_type=existing.content_type,
+        title=existing.title or f"YouTube: {video_id}",
+        job_id=None,
     )
 
 
@@ -239,38 +281,18 @@ async def _backfill_youtube_metadata(
 ) -> IngestResponse:
     """Backfill YouTube API metadata for an existing record with incomplete data."""
     logger.info("Backfilling metadata for existing record %s", existing.id)
-
     existing_meta = existing.metadata or {}
-    language = existing_meta.get("language", "en")
-    segment_count = existing_meta.get("segment_count", 0)
 
-    # Fetch rich metadata from YouTube Data API
     try:
         yt_metadata = metadata_service.fetch_metadata(video_id)
         logger.info("Fetched metadata for video %s: %s", video_id, yt_metadata.title)
     except Exception as e:
         logger.warning("Failed to fetch YouTube metadata for %s: %s", video_id, e)
-        return IngestResponse(
-            content_id=existing.id,
-            content_type=existing.content_type,
-            title=existing.title or f"YouTube: {video_id}",
-            job_id=None,
-        )
+        return _existing_ingest_response(existing, video_id)
 
     title = yt_metadata.title
-    updated_metadata = {
-        **existing_meta,
-        "published_at": yt_metadata.published_at,
-        "fetched_at": yt_metadata.fetched_at,
-        "channel_id": yt_metadata.channel_id,
-        "channel_title": yt_metadata.channel_title,
-        "duration_seconds": yt_metadata.duration_seconds,
-        "view_count": yt_metadata.view_count,
-        "like_count": yt_metadata.like_count,
-        "description_urls": yt_metadata.description_urls,
-    }
+    updated_metadata = _build_updated_metadata(existing_meta, yt_metadata)
 
-    # Update SurrealDB record
     # Note: WHERE id = $id requires RecordID object, not plain string (see gotchas.md)
     try:
         surreal_repo.db.query(
@@ -285,33 +307,19 @@ async def _backfill_youtube_metadata(
         logger.info("Updated metadata for video %s in database", video_id)
     except Exception as e:
         logger.error("Failed to update SurrealDB for %s: %s", video_id, e)
-        return IngestResponse(
-            content_id=existing.id,
-            content_type=existing.content_type,
-            title=existing.title or f"YouTube: {video_id}",
-            job_id=None,
-        )
+        return _existing_ingest_response(existing, video_id)
 
-    # Read transcript length for metadata.json
-    transcript_length = 0
-    try:
-        transcript_bytes = await minio_storage.download(existing.file_path)
-        transcript_length = len(transcript_bytes.decode("utf-8"))
-    except Exception as e:
-        logger.warning("Failed to read transcript for metadata.json: %s", e)
-
-    # Update MinIO metadata.json (non-fatal: database is source of truth)
+    transcript_length = await _read_transcript_length(minio_storage, existing.file_path)
+    created_at_str = existing.created_at.isoformat() if existing.created_at else None
+    language = existing_meta.get("language", "en")
+    segment_count = existing_meta.get("segment_count", 0)
     metadata_dict = _build_minio_metadata(
-        content_id=existing.id,
-        video_id=video_id,
-        title=title,
-        yt_metadata=yt_metadata,
-        language=language,
-        segment_count=segment_count,
-        transcript_length=transcript_length,
-        file_size=existing.file_size,
-        author=existing.author,
-        created_at=existing.created_at.isoformat() if existing.created_at else None,
+        existing.id,
+        video_id,
+        title,
+        yt_metadata,
+        (language, segment_count, transcript_length),
+        (existing.file_size, existing.author, created_at_str),
     )
     try:
         await minio_storage.upload(
@@ -322,26 +330,58 @@ async def _backfill_youtube_metadata(
     except Exception as e:
         logger.warning("Failed to update metadata.json for %s: %s", video_id, e)
 
-    return IngestResponse(
-        content_id=existing.id,
-        content_type="youtube",
-        title=title,
-        job_id=None,
-    )
+    return IngestResponse(content_id=existing.id, content_type="youtube", title=title, job_id=None)
+
+
+async def _read_transcript_length(minio_storage: MinIOStorage, file_path: str) -> int:
+    """Download transcript and return its character length; returns 0 on error."""
+    try:
+        transcript_bytes = await minio_storage.download(file_path)
+        return len(transcript_bytes.decode("utf-8"))
+    except Exception as e:
+        logger.warning("Failed to read transcript for metadata.json: %s", e)
+        return 0
+
+
+def _build_yt_content_metadata(
+    video_id: str,
+    resource_key: str,
+    transcript_language: str,
+    segment_count: int,
+    yt_metadata: YouTubeMetadata | None,
+) -> dict:
+    """Build the SurrealDB content metadata dict for a new YouTube ingest."""
+    return {
+        "video_id": video_id,
+        "language": transcript_language,
+        "segment_count": segment_count,
+        "resource_key": resource_key,
+        **{
+            k: (getattr(yt_metadata, a) if yt_metadata else d)
+            for k, a, d in [
+                ("published_at", "published_at", None),
+                ("fetched_at", "fetched_at", None),
+                ("channel_id", "channel_id", None),
+                ("channel_title", "channel_title", None),
+                ("duration_seconds", "duration_seconds", None),
+                ("view_count", "view_count", None),
+                ("like_count", "like_count", None),
+                ("description_urls", "description_urls", []),
+            ]
+        },
+    }
 
 
 async def _ingest_new_youtube(
     video_id: str,
     key_id: str,
     resource_key: str,
-    youtube_service: YouTubeService,
-    metadata_service: YouTubeMetadataService,
-    minio_storage: MinIOStorage,
-    surreal_repo: SurrealDBRepository,
+    svc: tuple[YouTubeService, YouTubeMetadataService, MinIOStorage, SurrealDBRepository],
     orchestrator: PipelineOrchestrator,
     tags: list[str] | None = None,
 ) -> IngestResponse:
     """Ingest a new YouTube video (transcript + metadata + pipeline)."""
+    youtube_service, metadata_service, minio_storage, surreal_repo = svc
     transcript = youtube_service.fetch_transcript(video_id)
     transcript_text = transcript.full_text
     file_path = f"youtube/{video_id}/transcript.txt"
@@ -352,7 +392,6 @@ async def _ingest_new_youtube(
         "text/plain",
     )
 
-    # Fetch rich metadata from YouTube Data API
     yt_metadata = None
     try:
         yt_metadata = metadata_service.fetch_metadata(video_id)
@@ -361,25 +400,13 @@ async def _ingest_new_youtube(
         logger.warning("Failed to fetch YouTube metadata for %s: %s", video_id, e)
 
     title = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
-    content_metadata = {
-        "video_id": video_id,
-        "language": transcript.language,
-        "segment_count": len(transcript.segments),
-        "resource_key": resource_key,
-        "published_at": yt_metadata.published_at if yt_metadata else None,
-        "fetched_at": yt_metadata.fetched_at if yt_metadata else None,
-        "channel_id": yt_metadata.channel_id if yt_metadata else None,
-        "channel_title": yt_metadata.channel_title if yt_metadata else None,
-        "duration_seconds": yt_metadata.duration_seconds if yt_metadata else None,
-        "view_count": yt_metadata.view_count if yt_metadata else None,
-        "like_count": yt_metadata.like_count if yt_metadata else None,
-        "description_urls": yt_metadata.description_urls if yt_metadata else [],
-    }
-
-    # Merge YouTube API tags with explicit tags from request
+    seg_count = len(transcript.segments)
+    content_metadata = _build_yt_content_metadata(
+        video_id, resource_key, transcript.language, seg_count, yt_metadata
+    )
     combined_tags = list(set((yt_metadata.tags if yt_metadata else []) + (tags or [])))
 
-    metadata = ContentMetadata(
+    record = ContentMetadata(
         content_type="youtube",
         title=title,
         mime_type="text/plain",
@@ -389,21 +416,17 @@ async def _ingest_new_youtube(
         tags=combined_tags,
         metadata=content_metadata,
     )
-    created = await surreal_repo.create_content(metadata)
+    created = await surreal_repo.create_content(record)
     content_id = created.id or video_id
+    created_at_str = created.created_at.isoformat() if created.created_at else None
 
-    # Save metadata.json to MinIO
     metadata_dict = _build_minio_metadata(
-        content_id=content_id,
-        video_id=video_id,
-        title=title,
-        yt_metadata=yt_metadata,
-        language=transcript.language,
-        segment_count=len(transcript.segments),
-        transcript_length=len(transcript_text),
-        file_size=file_size,
-        author=key_id,
-        created_at=created.created_at.isoformat() if created.created_at else None,
+        content_id,
+        video_id,
+        title,
+        yt_metadata,
+        (transcript.language, seg_count, len(transcript_text)),
+        (file_size, key_id, created_at_str),
     )
     await minio_storage.upload(
         f"youtube/{video_id}/metadata.json",
@@ -411,14 +434,7 @@ async def _ingest_new_youtube(
         "application/json",
     )
 
-    job = await orchestrator.submit(
-        content_id,
-        transcript_text,
-        "youtube",
-        title,
-        resource_key,
-    )
-
+    job = await orchestrator.submit(content_id, transcript_text, "youtube", title, resource_key)
     return IngestResponse(
         content_id=content_id,
         content_type="youtube",
@@ -486,27 +502,32 @@ async def _ingest_web(
     )
 
 
+def _normalize_netloc(hostname: str | None, port: int | None) -> str:
+    """Build netloc from hostname (stripping www.) and optional port."""
+    host = (hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return f"{host}:{port}" if port else host
+
+
+def _canonical_query(query_string: str) -> str:
+    """Strip tracking params and sort remaining query params."""
+    items = parse_qsl(query_string, keep_blank_values=True)
+    filtered = sorted(
+        ((k, v) for k, v in items if not _is_tracking_param(k)),
+        key=lambda x: (x[0], x[1]),
+    )
+    return urlencode(filtered, doseq=True)
+
+
 def canonicalize_web_url(url: str) -> str:
     """Deterministically canonicalize web URLs for dedupe."""
     parsed = urlparse(url)
-
-    host = (parsed.hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-
-    netloc = host
-    if parsed.port:
-        netloc = f"{host}:{parsed.port}"
-
+    netloc = _normalize_netloc(parsed.hostname, parsed.port)
     path = parsed.path or ""
     if path not in {"", "/"} and path.endswith("/"):
         path = path.rstrip("/")
-
-    query_items = parse_qsl(parsed.query, keep_blank_values=True)
-    filtered = [item for item in query_items if not _is_tracking_param(item[0])]
-    filtered.sort(key=lambda item: (item[0], item[1]))
-    query = urlencode(filtered, doseq=True)
-
+    query = _canonical_query(parsed.query)
     return urlunparse((parsed.scheme, netloc, path, "", query, ""))
 
 

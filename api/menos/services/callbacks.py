@@ -38,23 +38,9 @@ class CallbackService:
         self.callback_url = settings.callback_url
         self.callback_secret = settings.callback_secret
 
-    async def notify(
-        self,
-        job: PipelineJob,
-        result_dict: dict | None = None,
-    ) -> None:
-        """Send a webhook notification for a completed job.
-
-        Fire-and-forget: delivery failure is logged but never propagated.
-
-        Args:
-            job: Completed pipeline job
-            result_dict: Pipeline result data (if completed successfully)
-        """
-        if not self.callback_url or not self.callback_secret:
-            return
-
-        payload = {
+    def _build_payload(self, job: PipelineJob, result_dict: dict | None) -> str:
+        """Build the signed JSON body for the webhook."""
+        payload: dict = {
             "schema_version": "1",
             "event_id": _callback_event_id(job.id or ""),
             "job_id": job.id,
@@ -63,51 +49,45 @@ class CallbackService:
             "status": job.status.value if hasattr(job.status, "value") else str(job.status),
             "pipeline_version": job.pipeline_version,
         }
-
         if result_dict:
             payload["result"] = result_dict
-
         if job.error_code:
             payload["error_code"] = job.error_code
         if job.error_message:
             payload["error_message"] = job.error_message
+        return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
-        body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-        signature = hmac.new(
-            self.callback_secret.encode(), body.encode(), hashlib.sha256
-        ).hexdigest()
+    async def _attempt_delivery(self, body: str, headers: dict, job_id: str) -> bool:
+        """Try once to deliver the webhook. Returns True on success."""
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(self.callback_url, content=body, headers=headers)
+            response.raise_for_status()
+        logger.info("audit.callback_delivery job_id=%s success=true", job_id)
+        return True
 
-        headers = {
-            "Content-Type": "application/json",
-            "X-Menos-Signature": signature,
-        }
+    async def notify(
+        self,
+        job: PipelineJob,
+        result_dict: dict | None = None,
+    ) -> None:
+        """Send a webhook notification for a completed job (fire-and-forget)."""
+        if not self.callback_url or not self.callback_secret:
+            return
 
-        # Retry with exponential backoff: 1s, 4s, 16s
+        body = self._build_payload(job, result_dict)
+        sig = hmac.new(self.callback_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+        headers = {"Content-Type": "application/json", "X-Menos-Signature": sig}
+
         delays = [1, 4, 16]
         for attempt, delay in enumerate(delays, 1):
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.post(self.callback_url, content=body, headers=headers)
-                    response.raise_for_status()
-                    logger.info(
-                        "audit.callback_delivery job_id=%s attempt=%d success=true",
-                        job.id,
-                        attempt,
-                    )
-                    return
+                await self._attempt_delivery(body, headers, job.id or "")
+                return
             except Exception as e:
                 logger.warning(
-                    "Callback attempt %d/%d failed for job %s: %s",
-                    attempt,
-                    len(delays),
-                    job.id,
-                    e,
+                    "Callback attempt %d/%d failed for job %s: %s", attempt, len(delays), job.id, e
                 )
                 if attempt < len(delays):
                     await asyncio.sleep(delay)
 
-        logger.error(
-            "audit.callback_delivery job_id=%s attempt=%d success=false",
-            job.id,
-            len(delays),
-        )
+        logger.error("audit.callback_delivery job_id=%s success=false", job.id)

@@ -50,96 +50,98 @@ class URLDetector:
             List of detected URLs with their types and extracted IDs
         """
         detected: list[tuple[int, DetectedURL]] = []
+        detected.extend(self._detect_github(text))
+        detected.extend(self._detect_arxiv(text))
+        detected.extend(self._detect_doi(text))
+        detected.extend(self._detect_pypi(text))
+        detected.extend(self._detect_npm(text))
+        detected.sort(key=lambda x: x[0])
+        return [url for _, url in detected]
 
-        # Detect GitHub repos
+    def _detect_github(self, text: str) -> list[tuple[int, DetectedURL]]:
+        results = []
         for match in self.GITHUB_REPO_PATTERN.finditer(text):
-            owner = match.group(1)
-            repo = match.group(2)
+            owner, repo = match.group(1), match.group(2)
             matched_text = match.group(0).rstrip("/ \t\r\n?#)")
             protocol = "https" if matched_text.startswith("https") else "http"
-            full_url = f"{protocol}://github.com/{owner}/{repo}"
-            detected.append(
+            results.append(
                 (
                     match.start(),
                     DetectedURL(
-                        url=full_url,
+                        url=f"{protocol}://github.com/{owner}/{repo}",
                         url_type="github_repo",
                         extracted_id=f"{owner}/{repo}",
                     ),
                 )
             )
+        return results
 
-        # Detect arXiv papers
+    def _detect_arxiv(self, text: str) -> list[tuple[int, DetectedURL]]:
+        results = []
         for match in self.ARXIV_PATTERN.finditer(text):
-            arxiv_id = match.group(1)
-            full_url = match.group(0).rstrip(" \t\r\n)")
-            detected.append(
+            results.append(
                 (
                     match.start(),
                     DetectedURL(
-                        url=full_url,
+                        url=match.group(0).rstrip(" \t\r\n)"),
                         url_type="arxiv",
-                        extracted_id=arxiv_id,
+                        extracted_id=match.group(1),
                     ),
                 )
             )
+        return results
 
-        # Detect DOIs
+    def _detect_doi(self, text: str) -> list[tuple[int, DetectedURL]]:
+        results = []
         for match in self.DOI_PATTERN.finditer(text):
-            doi = match.group(1)
-            matched_text = match.group(0)
-            # Strip trailing whitespace, delimiters, and sentence-ending punctuation
-            full_url = matched_text.rstrip(' \t\r\n<>".)')
-            detected.append(
+            results.append(
                 (
                     match.start(),
                     DetectedURL(
-                        url=full_url,
+                        url=match.group(0).rstrip(' \t\r\n<>".)'),
                         url_type="doi",
-                        extracted_id=doi,
+                        extracted_id=match.group(1),
                     ),
                 )
             )
+        return results
 
-        # Detect PyPI packages
+    def _detect_pypi(self, text: str) -> list[tuple[int, DetectedURL]]:
+        results = []
         for match in self.PYPI_PATTERN.finditer(text):
             package = match.group(1)
             matched_text = match.group(0)
             protocol = "https" if matched_text.startswith("https") else "http"
-            base_url = f"{protocol}://pypi.org/project/{package}"
-            detected.append(
+            results.append(
                 (
                     match.start(),
                     DetectedURL(
-                        url=base_url,
+                        url=f"{protocol}://pypi.org/project/{package}",
                         url_type="pypi",
                         extracted_id=package,
                     ),
                 )
             )
+        return results
 
-        # Detect npm packages
+    def _detect_npm(self, text: str) -> list[tuple[int, DetectedURL]]:
+        results = []
         for match in self.NPM_PATTERN.finditer(text):
             package = match.group(1)
             matched_text = match.group(0)
-            has_www = "www." in matched_text
             protocol = "https" if matched_text.startswith("https") else "http"
-            www_part = "www." if has_www else ""
-            base_url = f"{protocol}://{www_part}npmjs.com/package/{package}"
-            detected.append(
+            www_part = "www." if "www." in matched_text else ""
+            results.append(
                 (
                     match.start(),
                     DetectedURL(
-                        url=base_url,
+                        url=f"{protocol}://{www_part}npmjs.com/package/{package}",
                         url_type="npm",
                         extracted_id=package,
                     ),
                 )
             )
-
-        # Sort by position and return just the DetectedURL objects
-        detected.sort(key=lambda x: x[0])
-        return [url for _, url in detected]
+        return results
 
     def detect_github_repos(self, text: str) -> list[DetectedURL]:
         """Detect only GitHub repository URLs."""
@@ -182,6 +184,8 @@ class URLDetector:
 
         return DetectedURL(url=url, url_type="web", extracted_id="")
 
+    _YT_ID_RE = re.compile(r"[0-9A-Za-z_-]{11}")
+
     def _extract_youtube_id(self, parsed_url) -> str | None:
         netloc = (parsed_url.netloc or "").lower()
         path = parsed_url.path or ""
@@ -193,16 +197,22 @@ class URLDetector:
         if not self.YOUTUBE_WATCH_PATTERN.search(netloc):
             return None
 
-        query = parse_qs(parsed_url.query)
+        return self._extract_youtube_watch_id(parsed_url.query, path)
+
+    def _valid_yt_id(self, candidate: str) -> str | None:
+        """Return candidate if it matches the YouTube video ID format, else None."""
+        return candidate if self._YT_ID_RE.fullmatch(candidate) else None
+
+    def _extract_youtube_watch_id(self, query_string: str, path: str) -> str | None:
+        """Extract video ID from a youtube.com watch/shorts/embed URL."""
+        query = parse_qs(query_string)
         if "v" in query and query["v"]:
-            video_id = query["v"][0]
-            if re.fullmatch(r"[0-9A-Za-z_-]{11}", video_id):
-                return video_id
+            result = self._valid_yt_id(query["v"][0])
+            if result:
+                return result
 
         path_parts = [part for part in path.split("/") if part]
         if len(path_parts) >= 2 and path_parts[0] in {"shorts", "embed"}:
-            video_id = path_parts[1]
-            if re.fullmatch(r"[0-9A-Za-z_-]{11}", video_id):
-                return video_id
+            return self._valid_yt_id(path_parts[1])
 
         return None

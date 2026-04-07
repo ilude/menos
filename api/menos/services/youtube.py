@@ -86,67 +86,52 @@ class YouTubeService:
                 return match.group(1)
         raise ValueError(f"Could not extract video ID from: {url_or_id}")
 
+    def _map_transcript_error(self, video_id: str, exc: Exception) -> ValueError:
+        """Convert a youtube_transcript_api exception to a descriptive ValueError."""
+        if isinstance(exc, RequestBlocked):
+            return ValueError(
+                f"YouTube is blocking requests for video {video_id} despite using "
+                f"Webshare proxy. Ensure you have purchased 'Residential' proxies "
+                f"(not 'Proxy Server' or 'Static Residential'). "
+                f"Check WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD in .env. "
+                f"Original error: {exc}"
+            )
+        if isinstance(exc, YouTubeRequestFailed):
+            return ValueError(
+                f"YouTube request failed for video {video_id}. This may indicate a "
+                f"proxy connection issue. Check WEBSHARE_PROXY_USERNAME and "
+                f"WEBSHARE_PROXY_PASSWORD in .env. Original error: {exc}"
+            )
+        if isinstance(exc, VideoUnavailable):
+            return ValueError(f"Video unavailable: {video_id}")
+        if isinstance(exc, TranscriptsDisabled):
+            return ValueError(f"Transcripts disabled for video: {video_id}")
+        if isinstance(exc, NoTranscriptFound):
+            return ValueError(f"No transcript found for video: {video_id}")
+        return ValueError(f"Failed to fetch transcript: {exc}")
+
     def fetch_transcript(
         self,
         video_id: str,
         languages: list[str] | None = None,
     ) -> YouTubeTranscript:
-        """Fetch transcript for a video.
-
-        Args:
-            video_id: YouTube video ID
-            languages: Preferred languages in order (default: ["en"])
-
-        Returns:
-            YouTubeTranscript with segments
-
-        Raises:
-            ValueError: If transcript is unavailable
-        """
+        """Fetch transcript for a video."""
         if languages is None:
             languages = ["en"]
-
         try:
             api = YouTubeTranscriptApi(proxy_config=self.proxy_config)
             fetched = api.fetch(video_id, languages=tuple(languages))
-
             segments = [
-                TranscriptSegment(
-                    text=entry.text,
-                    start=entry.start,
-                    duration=entry.duration,
-                )
+                TranscriptSegment(text=entry.text, start=entry.start, duration=entry.duration)
                 for entry in fetched
             ]
-
             return YouTubeTranscript(
                 video_id=video_id,
                 segments=segments,
                 language=languages[0] if languages else "en",
             )
-
-        except RequestBlocked as e:
-            raise ValueError(
-                f"YouTube is blocking requests for video {video_id} despite using "
-                f"Webshare proxy. Ensure you have purchased 'Residential' proxies "
-                f"(not 'Proxy Server' or 'Static Residential'). "
-                f"Check WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD in .env. "
-                f"Original error: {e}"
-            ) from e
-        except YouTubeRequestFailed as e:
-            raise ValueError(
-                f"YouTube request failed for video {video_id}. This may indicate a "
-                f"proxy connection issue. Check WEBSHARE_PROXY_USERNAME and "
-                f"WEBSHARE_PROXY_PASSWORD in .env. Original error: {e}"
-            ) from e
-        except VideoUnavailable as e:
-            raise ValueError(f"Video unavailable: {video_id}") from e
-        except TranscriptsDisabled as e:
-            raise ValueError(f"Transcripts disabled for video: {video_id}") from e
-        except NoTranscriptFound as e:
-            raise ValueError(f"No transcript found for video: {video_id}") from e
         except Exception as e:
-            raise ValueError(f"Failed to fetch transcript: {e}") from e
+            raise self._map_transcript_error(video_id, e) from e
 
 
 def get_youtube_service() -> YouTubeService:

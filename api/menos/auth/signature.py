@@ -28,36 +28,16 @@ class SignatureVerifier:
         if not sig_input or not signature:
             raise HTTPException(401, "Missing signature headers")
 
-        # Parse signature-input to get parameters
         params = self._parse_signature_input(sig_input)
-        key_id = params.get("keyid")
-        created = params.get("created")
-        alg = params.get("alg", "ed25519")
+        key_id = self._validate_params(params)
+        self._check_timestamp(params.get("created"))
 
-        if not key_id:
-            raise HTTPException(401, "Missing keyid in signature-input")
-
-        if alg != "ed25519":
-            raise HTTPException(401, f"Unsupported algorithm: {alg}")
-
-        # Check timestamp
-        if created:
-            created_time = datetime.fromtimestamp(int(created), tz=UTC)
-            now = datetime.now(UTC)
-            age = (now - created_time).total_seconds()
-            if abs(age) > self.MAX_AGE:
-                raise HTTPException(401, "Signature expired or from future")
-
-        # Get public key
         public_key = self.key_store.get_key(key_id)
         if not public_key:
             raise HTTPException(401, f"Unknown key: {key_id}")
 
-        # Build signature base
         covered_components = params.get("components", [])
         signature_base = await self._build_signature_base(request, covered_components, sig_input)
-
-        # Extract and verify signature
         sig_bytes = self._extract_signature(signature)
 
         try:
@@ -66,6 +46,25 @@ class SignatureVerifier:
             raise HTTPException(401, "Invalid signature")
 
         return key_id
+
+    def _validate_params(self, params: dict) -> str:
+        """Validate signature parameters and return key_id."""
+        key_id = params.get("keyid")
+        if not key_id:
+            raise HTTPException(401, "Missing keyid in signature-input")
+        alg = params.get("alg", "ed25519")
+        if alg != "ed25519":
+            raise HTTPException(401, f"Unsupported algorithm: {alg}")
+        return key_id
+
+    def _check_timestamp(self, created: str | None) -> None:
+        """Raise 401 if the created timestamp is outside the validity window."""
+        if not created:
+            return
+        created_time = datetime.fromtimestamp(int(created), tz=UTC)
+        age = (datetime.now(UTC) - created_time).total_seconds()
+        if abs(age) > self.MAX_AGE:
+            raise HTTPException(401, "Signature expired or from future")
 
     def _parse_signature_input(self, sig_input: str) -> dict:
         """Parse signature-input header."""
@@ -95,36 +94,32 @@ class SignatureVerifier:
         self, request: Request, components: list[str], sig_input: str
     ) -> str:
         """Build the signature base string per RFC 9421."""
-        lines = []
-
-        for component in components:
-            if component == "@method":
-                lines.append(f'"@method": {request.method}')
-            elif component == "@path":
-                # Per RFC 9421, @path includes query string
-                path = request.url.path
-                if request.url.query:
-                    path = f"{path}?{request.url.query}"
-                lines.append(f'"@path": {path}')
-            elif component == "@authority":
-                lines.append(f'"@authority": {request.headers.get("host", "")}')
-            elif component == "@target-uri":
-                lines.append(f'"@target-uri": {str(request.url)}')
-            elif component == "content-digest":
-                body = await request.body()
-                digest = hashlib.sha256(body).digest()
-                digest_b64 = __import__("base64").b64encode(digest).decode()
-                lines.append(f'"content-digest": sha-256=:{digest_b64}:')
-            elif not component.startswith("@"):
-                # Regular header
-                value = request.headers.get(component, "")
-                lines.append(f'"{component}": {value}')
-
-        # Add signature-params line
+        lines = [await self._resolve_component(request, c) for c in components]
         sig_params = sig_input.split("=", 1)[1] if "=" in sig_input else sig_input
         lines.append(f'"@signature-params": {sig_params}')
-
         return "\n".join(lines)
+
+    async def _resolve_component(self, request: Request, component: str) -> str:
+        """Resolve a single signature component to its header line."""
+        if component == "@method":
+            return f'"@method": {request.method}'
+        if component == "@path":
+            path = request.url.path
+            if request.url.query:
+                path = f"{path}?{request.url.query}"
+            return f'"@path": {path}'
+        if component == "@authority":
+            return f'"@authority": {request.headers.get("host", "")}'
+        if component == "@target-uri":
+            return f'"@target-uri": {str(request.url)}'
+        if component == "content-digest":
+            body = await request.body()
+            digest = hashlib.sha256(body).digest()
+            digest_b64 = __import__("base64").b64encode(digest).decode()
+            return f'"content-digest": sha-256=:{digest_b64}:'
+        # Regular header
+        value = request.headers.get(component, "")
+        return f'"{component}": {value}'
 
     def _extract_signature(self, signature_header: str) -> bytes:
         """Extract signature bytes from header."""

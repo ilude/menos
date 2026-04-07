@@ -19,53 +19,36 @@ TRACKING_PARAMS = {
 }
 
 
-def normalize_url(url: str) -> str:
-    """Normalize a URL for consistent hashing.
-
-    - Lowercase scheme + host
-    - Upgrade http to https
-    - Remove default ports (80 for http, 443 for https)
-    - Strip fragment
-    - Remove trailing slash (except root "/")
-    - Remove tracking params, sort remaining params
-    """
-    parsed = urlparse(url)
-
-    # Lowercase scheme and host
-    scheme = parsed.scheme.lower()
+def _normalize_scheme_host(parsed) -> tuple[str, str, int | None]:
+    """Return (scheme, host, port) with http→https and default ports removed."""
+    scheme = "https" if parsed.scheme.lower() == "http" else parsed.scheme.lower()
     host = parsed.hostname or ""
-    port = parsed.port
+    port = parsed.port if parsed.port not in (80, 443, None) else None
+    return scheme, host, port
 
-    # Upgrade http to https
-    if scheme == "http":
-        scheme = "https"
 
-    # Remove default ports
-    if port in (80, 443):
-        port = None
-
-    # Reconstruct netloc
-    netloc = host
-    if port:
-        netloc = f"{host}:{port}"
-
-    # Strip fragment
-    path = parsed.path
-
-    # Remove trailing slash except for root
+def _normalize_path(path: str) -> str:
+    """Strip trailing slash except for root '/'."""
     if path != "/" and path.endswith("/"):
-        path = path.rstrip("/")
+        return path.rstrip("/")
+    return path
 
-    # Parse query params, remove tracking, sort remaining
-    query_params = parse_qs(parsed.query, keep_blank_values=True)
-    filtered_params = {k: v for k, v in query_params.items() if k not in TRACKING_PARAMS}
-    # Sort and rebuild query string
-    sorted_pairs = []
-    for key in sorted(filtered_params.keys()):
-        for val in filtered_params[key]:
-            sorted_pairs.append((key, val))
-    query = urlencode(sorted_pairs)
 
+def _normalize_query(query_string: str) -> str:
+    """Remove tracking params and sort remaining query params."""
+    params = parse_qs(query_string, keep_blank_values=True)
+    filtered = {k: v for k, v in params.items() if k not in TRACKING_PARAMS}
+    pairs = [(k, v) for k in sorted(filtered) for v in filtered[k]]
+    return urlencode(pairs)
+
+
+def normalize_url(url: str) -> str:
+    """Normalize a URL for consistent hashing."""
+    parsed = urlparse(url)
+    scheme, host, port = _normalize_scheme_host(parsed)
+    netloc = f"{host}:{port}" if port else host
+    path = _normalize_path(parsed.path)
+    query = _normalize_query(parsed.query)
     return urlunparse((scheme, netloc, path, "", query, ""))
 
 

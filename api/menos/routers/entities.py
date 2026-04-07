@@ -262,6 +262,23 @@ async def get_entity_content(
     return EntityContentListResponse(items=items, total=len(items))
 
 
+def _build_entity_updates(update_request: EntityUpdateRequest, existing_metadata: dict) -> dict:
+    """Build the updates dict for an entity patch request."""
+    from menos.services.normalization import normalize_name
+
+    updates = {}
+    if update_request.name is not None:
+        updates["name"] = update_request.name
+        updates["normalized_name"] = normalize_name(update_request.name)
+    if update_request.description is not None:
+        updates["description"] = update_request.description
+    if update_request.aliases is not None:
+        meta = dict(existing_metadata)
+        meta["aliases"] = update_request.aliases
+        updates["metadata"] = meta
+    return updates
+
+
 @router.patch("/{entity_id}", response_model=EntityResponse)
 async def update_entity(
     entity_id: str,
@@ -274,21 +291,7 @@ async def update_entity(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
 
-    updates = {}
-    if update_request.name is not None:
-        from menos.services.normalization import normalize_name
-
-        updates["name"] = update_request.name
-        updates["normalized_name"] = normalize_name(update_request.name)
-
-    if update_request.description is not None:
-        updates["description"] = update_request.description
-
-    if update_request.aliases is not None:
-        metadata = entity.metadata or {}
-        metadata["aliases"] = update_request.aliases
-        updates["metadata"] = metadata
-
+    updates = _build_entity_updates(update_request, entity.metadata or {})
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
 
