@@ -93,6 +93,24 @@ class DriftReportResponse(BaseModel):
 # -- Reprocess endpoint --
 
 
+def _already_completed(content_id: str, surreal_repo: SurrealDBRepository) -> bool:
+    """Return True if content processing_status is 'completed'."""
+    raw = surreal_repo.db.query(
+        "SELECT processing_status FROM content WHERE id = $id",
+        {"id": content_id},
+    )
+    parsed = surreal_repo._parse_query_result(raw)
+    return bool(parsed and parsed[0].get("processing_status") == "completed")
+
+
+def _resolve_resource_key(content, content_id: str) -> str:
+    """Generate the resource key for content reprocessing."""
+    video_id = content.metadata.get("video_id") if content.metadata else None
+    if content.content_type == "youtube" and video_id:
+        return generate_resource_key("youtube", video_id)
+    return generate_resource_key(content.content_type, content_id)
+
+
 @content_router.post("/{content_id}/reprocess", response_model=ReprocessResponse)
 async def reprocess_content(
     content_id: str,
@@ -102,66 +120,52 @@ async def reprocess_content(
     minio_storage: MinIOStorage = Depends(get_minio_storage),
     surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
 ):
-    """Reprocess content through the unified pipeline.
-
-    Submits existing content for reprocessing. Skips if already completed
-    unless force=true.
-    """
+    """Reprocess content through the unified pipeline."""
     content = await surreal_repo.get_content(content_id)
     if not content:
         raise HTTPException(status_code=404, detail="Content not found")
 
     logger.info(
-        "audit.reprocess_trigger content_id=%s force=%s key_id=%s",
-        content_id,
-        force,
-        key_id,
+        "audit.reprocess_trigger content_id=%s force=%s key_id=%s", content_id, force, key_id
     )
 
-    # Check processing status unless force
-    if not force:
-        raw = surreal_repo.db.query(
-            "SELECT processing_status FROM content WHERE id = $id",
-            {"id": content_id},
-        )
-        parsed = surreal_repo._parse_query_result(raw)
-        if parsed and parsed[0].get("processing_status") == "completed":
-            return ReprocessResponse(content_id=content_id, status="already_completed")
+    if not force and _already_completed(content_id, surreal_repo):
+        return ReprocessResponse(content_id=content_id, status="already_completed")
 
-    # Download content text from storage
     try:
         content_bytes = await minio_storage.download(content.file_path)
         content_text = content_bytes.decode("utf-8")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download content: {e}") from e
 
-    # Generate resource key
-    video_id = content.metadata.get("video_id") if content.metadata else None
-    if content.content_type == "youtube" and video_id:
-        resource_key = generate_resource_key("youtube", video_id)
-    else:
-        resource_key = generate_resource_key(content.content_type, content_id)
-
-    # Submit to pipeline
+    resource_key = _resolve_resource_key(content, content_id)
     job = await orchestrator.submit(
-        content_id,
-        content_text,
-        content.content_type,
-        content.title or "Untitled",
-        resource_key,
+        content_id, content_text, content.content_type, content.title or "Untitled", resource_key
     )
 
-    if job is None:
-        return ReprocessResponse(content_id=content_id, status="submitted", job_id=None)
-
     return ReprocessResponse(
-        job_id=job.id,
+        job_id=job.id if job else None,
         content_id=content_id,
         status="submitted",
     )
 
 
 # -- Job management endpoints --
+
+
+def _parse_stale_content(report: dict) -> list[VersionCount]:
+    """Extract and parse stale_content rows from a drift report dict."""
+    rows = report.get("stale_content") if isinstance(report, dict) else []
+    result = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict):
+            result.append(
+                VersionCount(
+                    version=str(row.get("version") or ""),
+                    count=int(row.get("count") or 0),
+                )
+            )
+    return result
 
 
 @jobs_router.get("/drift", response_model=DriftReportResponse)
@@ -171,26 +175,43 @@ async def get_jobs_drift_report(
 ):
     """Get version drift report for completed content."""
     del key_id
-
     report = await surreal_repo.get_version_drift_report(settings.app_version)
-    rows = report.get("stale_content") if isinstance(report, dict) else []
-    stale_content = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        stale_content.append(
-            VersionCount(
-                version=str(row.get("version") or ""),
-                count=int(row.get("count") or 0),
-            )
-        )
-
+    if not isinstance(report, dict):
+        report = {}
     return DriftReportResponse(
         current_version=str(report.get("current_version") or settings.app_version),
-        stale_content=stale_content,
+        stale_content=_parse_stale_content(report),
         total_stale=int(report.get("total_stale") or 0),
         unknown_version_count=int(report.get("unknown_version_count") or 0),
         total_content=int(report.get("total_content") or 0),
+    )
+
+
+def _job_status_response(job, job_id: str) -> JobStatusResponse:
+    return JobStatusResponse(
+        job_id=job.id or job_id,
+        content_id=job.content_id,
+        status=job.status.value,
+        created_at=job.created_at.isoformat() if job.created_at else None,
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        finished_at=job.finished_at.isoformat() if job.finished_at else None,
+    )
+
+
+def _job_detail_response(job, job_id: str) -> JobDetailResponse:
+    return JobDetailResponse(
+        job_id=job.id or job_id,
+        content_id=job.content_id,
+        status=job.status.value,
+        created_at=job.created_at.isoformat() if job.created_at else None,
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        finished_at=job.finished_at.isoformat() if job.finished_at else None,
+        error_code=job.error_code,
+        error_message=job.error_message,
+        error_stage=job.error_stage,
+        resource_key=job.resource_key,
+        pipeline_version=job.pipeline_version,
+        metadata=job.metadata,
     )
 
 
@@ -207,34 +228,10 @@ async def get_job_status(
         raise HTTPException(status_code=404, detail="Job not found")
 
     if verbose:
-        logger.info(
-            "audit.full_tier_access job_id=%s key_id=%s",
-            job_id,
-            key_id,
-        )
-        return JobDetailResponse(
-            job_id=job.id or job_id,
-            content_id=job.content_id,
-            status=job.status.value,
-            created_at=job.created_at.isoformat() if job.created_at else None,
-            started_at=job.started_at.isoformat() if job.started_at else None,
-            finished_at=job.finished_at.isoformat() if job.finished_at else None,
-            error_code=job.error_code,
-            error_message=job.error_message,
-            error_stage=job.error_stage,
-            resource_key=job.resource_key,
-            pipeline_version=job.pipeline_version,
-            metadata=job.metadata,
-        )
+        logger.info("audit.full_tier_access job_id=%s key_id=%s", job_id, key_id)
+        return _job_detail_response(job, job_id)
 
-    return JobStatusResponse(
-        job_id=job.id or job_id,
-        content_id=job.content_id,
-        status=job.status.value,
-        created_at=job.created_at.isoformat() if job.created_at else None,
-        started_at=job.started_at.isoformat() if job.started_at else None,
-        finished_at=job.finished_at.isoformat() if job.finished_at else None,
-    )
+    return _job_status_response(job, job_id)
 
 
 @jobs_router.get("", response_model=JobListResponse)

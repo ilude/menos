@@ -1,7 +1,6 @@
 """Integration tests for health endpoints."""
 
 
-
 class TestHealthEndpoints:
     """Tests for health check endpoints."""
 
@@ -24,5 +23,5 @@ class TestHealthEndpoints:
         assert "status" in data
         assert "checks" in data
         assert "surrealdb" in data["checks"]
-        assert "minio" in data["checks"]
+        assert "s3" in data["checks"]
         assert "ollama" in data["checks"]

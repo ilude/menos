@@ -18,6 +18,49 @@ from menos.services.url_filter import apply_heuristic_filter
 from menos.services.youtube_metadata import extract_urls
 
 
+def _extract_content_id(item_id) -> str:
+    """Normalize a SurrealDB record ID to a plain string."""
+    if hasattr(item_id, "id"):
+        return item_id.id
+    if isinstance(item_id, str) and ":" in item_id:
+        return item_id.split(":")[-1]
+    return str(item_id)
+
+
+def _print_filter_results(description_urls: list, blocked: list, remaining: list) -> None:
+    """Print URL filtering results to stdout."""
+    print("\nURL Filtering Results:")
+    print(f"  Total URLs found: {len(description_urls)}")
+    print(f"  Blocked (heuristic): {len(blocked)}")
+    print(f"  Content URLs: {len(remaining)}")
+    if remaining:
+        print("\n  Content URLs:")
+        for url in remaining:
+            print(f"    [+] {url}")
+    if blocked:
+        print("\n  Blocked URLs:")
+        for url, reason in blocked:
+            print(f"    [-] {url} ({reason})")
+
+
+def _save_filter_results(
+    repo, content_id: str, description_urls: list, blocked: list, remaining: list
+) -> None:
+    """Persist URL filter results to the content metadata."""
+    url_filter_results = {
+        "all_urls": description_urls,
+        "content_urls": remaining,
+        "blocked_urls": [url for url, _ in blocked],
+        "blocked_reasons": {url: reason for url, reason in blocked},
+        "filter_version": "v1_heuristic",
+    }
+    repo.db.query(
+        "UPDATE content SET metadata.url_filter_results = $data,"
+        " updated_at = time::now() WHERE id = $id",
+        {"data": url_filter_results, "id": f"content:{content_id}"},
+    )
+
+
 async def process_single_video(
     video_id: str,
     repo,
@@ -28,7 +71,6 @@ async def process_single_video(
     Returns:
         Dict with processing results.
     """
-    # Look up content by YouTube video_id
     result = repo.db.query(
         "SELECT * FROM content WHERE content_type = 'youtube'"
         " AND metadata.video_id = $video_id LIMIT 1",
@@ -44,17 +86,8 @@ async def process_single_video(
     metadata = item.get("metadata", {}) or {}
     channel = metadata.get("channel_title", "Unknown")
     description = metadata.get("description", "")
+    content_id = _extract_content_id(item.get("id"))
 
-    # Extract content_id
-    item_id = item.get("id")
-    if hasattr(item_id, "id"):
-        content_id = item_id.id
-    elif isinstance(item_id, str) and ":" in item_id:
-        content_id = item_id.split(":")[-1]
-    else:
-        content_id = str(item_id)
-
-    # Try description_urls first, then extract from description
     description_urls = metadata.get("description_urls", [])
     if not description_urls and description:
         description_urls = extract_urls(description)
@@ -67,41 +100,13 @@ async def process_single_video(
         print("  No URLs found in description.")
         return {"success": True, "video_id": video_id, "total_urls": 0}
 
-    # Run heuristic filter
     filter_result = apply_heuristic_filter(description_urls)
     blocked = filter_result["blocked"]
     remaining = filter_result["remaining"]
+    _print_filter_results(description_urls, blocked, remaining)
 
-    # Print results
-    print("\nURL Filtering Results:")
-    print(f"  Total URLs found: {len(description_urls)}")
-    print(f"  Blocked (heuristic): {len(blocked)}")
-    print(f"  Content URLs: {len(remaining)}")
-
-    if remaining:
-        print("\n  Content URLs:")
-        for url in remaining:
-            print(f"    [+] {url}")
-
-    if blocked:
-        print("\n  Blocked URLs:")
-        for url, reason in blocked:
-            print(f"    [-] {url} ({reason})")
-
-    # Update content metadata (unless dry run)
     if not dry_run:
-        url_filter_results = {
-            "all_urls": description_urls,
-            "content_urls": remaining,
-            "blocked_urls": [url for url, _ in blocked],
-            "blocked_reasons": {url: reason for url, reason in blocked},
-            "filter_version": "v1_heuristic",
-        }
-        repo.db.query(
-            "UPDATE content SET metadata.url_filter_results = $data,"
-            " updated_at = time::now() WHERE id = $id",
-            {"data": url_filter_results, "id": f"content:{content_id}"},
-        )
+        _save_filter_results(repo, content_id, description_urls, blocked, remaining)
         print("\n  Content metadata updated.")
     else:
         print("\n  [DRY RUN] Content metadata NOT updated.")
@@ -115,9 +120,20 @@ async def process_single_video(
     }
 
 
+def _update_batch_stats(total_stats: dict, result: dict, video_id: str) -> None:
+    """Update batch stats in-place from a single video result."""
+    if result["success"]:
+        total_stats["processed"] += 1
+        total_stats["total_urls"] += result.get("total_urls", 0)
+        total_stats["content_urls"] += result.get("content_urls", 0)
+        total_stats["blocked_urls"] += result.get("blocked_urls", 0)
+    else:
+        total_stats["skipped"] += 1
+        print(f"  [SKIP] {result['message']}")
+
+
 async def process_all_videos(repo, dry_run: bool = False) -> dict:
     """Process URLs for all YouTube videos."""
-    # Get all YouTube content
     offset = 0
     batch_size = 50
     total_stats = {
@@ -141,28 +157,18 @@ async def process_all_videos(repo, dry_run: bool = False) -> dict:
             if not video_id:
                 total_stats["skipped"] += 1
                 continue
-
             try:
                 result = await process_single_video(video_id, repo, dry_run)
-                if result["success"]:
-                    total_stats["processed"] += 1
-                    total_stats["total_urls"] += result.get("total_urls", 0)
-                    total_stats["content_urls"] += result.get("content_urls", 0)
-                    total_stats["blocked_urls"] += result.get("blocked_urls", 0)
-                else:
-                    total_stats["skipped"] += 1
-                    print(f"  [SKIP] {result['message']}")
+                _update_batch_stats(total_stats, result, video_id)
             except Exception as e:
                 total_stats["errors"] += 1
                 print(f"  [ERROR] {video_id}: {e}")
-
             print("-" * 70)
 
         offset += batch_size
         if count < batch_size:
             break
 
-    # Print summary
     print(f"\n{'=' * 70}")
     print("Batch Processing Summary")
     print(f"{'=' * 70}")
@@ -198,9 +204,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Classify URLs in YouTube video descriptions"
-    )
+    parser = argparse.ArgumentParser(description="Classify URLs in YouTube video descriptions")
     parser.add_argument(
         "video_id",
         nargs="?",

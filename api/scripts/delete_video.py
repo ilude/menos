@@ -12,10 +12,36 @@ import sys
 from menos.services.di import get_storage_context
 
 
+def _extract_content_id(item_id) -> str:
+    """Normalize a SurrealDB record ID to a plain string ID."""
+    if hasattr(item_id, "id"):
+        return item_id.id
+    if isinstance(item_id, str) and ":" in item_id:
+        return item_id.split(":")[-1]
+    return str(item_id)
+
+
+def _confirm_deletion(video_id: str) -> bool:
+    """Prompt user for deletion confirmation. Returns True if confirmed."""
+    response = input(f"Delete video '{video_id}'? (y/N): ")
+    return response.lower() in ["y", "yes"]
+
+
+async def _delete_minio_files(minio, video_id: str, file_path: str) -> None:
+    """Delete known MinIO files for a video."""
+    if not file_path:
+        return
+    prefix = f"youtube/{video_id}/"
+    for suffix in ["transcript.txt", "metadata.json", "summary.md", "timestamped.txt"]:
+        try:
+            await minio.delete(f"{prefix}{suffix}")
+        except Exception:
+            pass
+
+
 async def delete_video(video_id: str, skip_confirm: bool = False) -> int:
     """Delete a video by YouTube video ID with confirmation."""
     async with get_storage_context() as (minio, repo):
-        # Look up content by YouTube video_id
         result = repo.db.query(
             "SELECT * FROM content WHERE content_type = 'youtube'"
             " AND metadata.video_id = $video_id LIMIT 1",
@@ -28,19 +54,11 @@ async def delete_video(video_id: str, skip_confirm: bool = False) -> int:
             return 1
 
         item = raw_items[0]
-        item_id = item.get("id")
-        if hasattr(item_id, "id"):
-            content_id = item_id.id
-        elif isinstance(item_id, str) and ":" in item_id:
-            content_id = item_id.split(":")[-1]
-        else:
-            content_id = str(item_id)
-
+        content_id = _extract_content_id(item.get("id"))
         title = item.get("title", "Unknown")
         metadata = item.get("metadata", {})
         channel = metadata.get("channel_title", "Unknown") if metadata else "Unknown"
 
-        # Show what will be deleted
         print("\nVideo to delete:")
         print(f"  Title: {title}")
         print(f"  Video ID: {video_id}")
@@ -48,34 +66,18 @@ async def delete_video(video_id: str, skip_confirm: bool = False) -> int:
         print(f"  Channel: {channel}")
         print()
 
-        # Confirmation prompt
-        if not skip_confirm:
-            response = input(f"Delete video '{video_id}'? (y/N): ")
-            if response.lower() not in ["y", "yes"]:
-                print("Deletion cancelled.")
-                return 0
+        if not skip_confirm and not _confirm_deletion(video_id):
+            print("Deletion cancelled.")
+            return 0
 
-        # Delete in order: chunks, entity edges, links, MinIO files, content record
         print("Deleting chunks...")
         await repo.delete_chunks(content_id)
-
         print("Deleting entity edges...")
         await repo.delete_content_entity_edges(content_id)
-
         print("Deleting links...")
         await repo.delete_links_by_source(content_id)
-
         print("Deleting MinIO files...")
-        file_path = item.get("file_path", "")
-        if file_path:
-            # Delete known files under youtube/{video_id}/
-            prefix = f"youtube/{video_id}/"
-            for suffix in ["transcript.txt", "metadata.json", "summary.md", "timestamped.txt"]:
-                try:
-                    await minio.delete(f"{prefix}{suffix}")
-                except Exception:
-                    pass  # File may not exist
-
+        await _delete_minio_files(minio, video_id, item.get("file_path", ""))
         print("Deleting content record...")
         await repo.delete_content(content_id)
 
@@ -99,7 +101,8 @@ Examples:
         help="YouTube video ID to delete",
     )
     parser.add_argument(
-        "--yes", "-y",
+        "--yes",
+        "-y",
         action="store_true",
         help="Skip confirmation prompt",
     )

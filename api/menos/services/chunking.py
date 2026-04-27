@@ -14,50 +14,37 @@ class ChunkingService:
         self.chunk_size = chunk_size
         self.overlap = overlap
 
+    def _find_chunk_end(self, text: str, start: int) -> int:
+        """Find the end index for a chunk, snapping to a word boundary."""
+        end = min(start + self.chunk_size, len(text))
+        if end < len(text):
+            last_space = text.rfind(" ", start, end)
+            if last_space > start:
+                end = last_space
+        return end
+
+    def _next_start(self, start: int, end: int) -> int:
+        """Compute the next start index with overlap, ensuring forward progress."""
+        new_start = end - self.overlap
+        return new_start if new_start > start else start + 1
+
     def chunk_text(self, text: str) -> list[str]:
-        """Split text into overlapping chunks.
-
-        Args:
-            text: Text to chunk
-
-        Returns:
-            List of text chunks
-        """
+        """Split text into overlapping chunks."""
         if not text:
             return []
-
         if len(text) <= self.chunk_size:
             return [text]
 
         chunks = []
         start = 0
-
         while start < len(text):
-            # Get chunk end, don't go past text length
-            end = min(start + self.chunk_size, len(text))
-
-            # Try to break at word boundary if not at end
-            if end < len(text):
-                # Look for last space before chunk_size
-                last_space = text.rfind(" ", start, end)
-                if last_space > start:
-                    end = last_space
-
+            end = self._find_chunk_end(text, start)
             chunk = text[start:end].strip()
-            if chunk:  # Only add non-empty chunks
+            if chunk:
                 chunks.append(chunk)
-
-            # If we've reached the end, stop
             if end >= len(text):
                 break
-
-            # Move start position, accounting for overlap
-            new_start = end - self.overlap
-            # Ensure we make progress (at least 1 character forward)
-            if new_start <= start:
-                new_start = start + 1
-            start = new_start
-
+            start = self._next_start(start, end)
         return chunks
 
     def chunk_lines(self, text: str, lines_per_chunk: int = 20) -> list[str]:

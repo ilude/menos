@@ -71,6 +71,44 @@ class ContentReprocessor:
             "pipeline_jobs_submitted": 0,
         }
 
+    def _log_summary(self, duration: float, entities_only: bool, skip_entities: bool) -> None:
+        """Log the final processing summary."""
+        logger.info("=" * 80)
+        logger.info("Reprocessing complete!")
+        logger.info(f"Duration: {duration:.2f} seconds")
+        logger.info(f"Total items: {self.stats['total']}")
+        logger.info(f"Processed: {self.stats['processed']}")
+        logger.info(f"Skipped: {self.stats['skipped']}")
+        logger.info(f"Errors: {self.stats['errors']}")
+        if not entities_only:
+            logger.info(f"Tags updated: {self.stats['tags_updated']}")
+            logger.info(f"Links created: {self.stats['links_created']}")
+        if not skip_entities:
+            logger.info(f"Pipeline jobs submitted: {self.stats['pipeline_jobs_submitted']}")
+        logger.info("=" * 80)
+
+    async def _process_batch(
+        self, items: list, dry_run: bool, entities_only: bool, skip_entities: bool
+    ) -> None:
+        """Process a single batch of content items."""
+        self.stats["total"] += len(items)
+        for item in items:
+            if not item.id:
+                logger.warning(f"Skipping item with no ID: {item.title}")
+                self.stats["skipped"] += 1
+                continue
+            try:
+                await self._reprocess_item(
+                    item,
+                    dry_run=dry_run,
+                    entities_only=entities_only,
+                    skip_entities=skip_entities,
+                )
+                self.stats["processed"] += 1
+            except Exception as e:
+                logger.error(f"Error processing content {item.id} ({item.title}): {e}")
+                self.stats["errors"] += 1
+
     async def reprocess_all_content(
         self,
         dry_run: bool = False,
@@ -93,63 +131,38 @@ class ContentReprocessor:
         if skip_entities:
             logger.info("SKIP ENTITIES MODE - Skipping entity extraction")
 
-        # No cache refresh needed for unified pipeline
-
-        # Fetch all content in batches
         offset = 0
-        limit = 20 if not skip_entities else 50  # Smaller batch for entity extraction
+        limit = 20 if not skip_entities else 50
         batch_num = 1
 
         while True:
             logger.info(f"Fetching batch {batch_num} (offset={offset}, limit={limit})")
             items, total = await self.surreal_repo.list_content(offset=offset, limit=limit)
-
             if not items:
                 break
-
-            self.stats["total"] += len(items)
-
-            for item in items:
-                if not item.id:
-                    logger.warning(f"Skipping item with no ID: {item.title}")
-                    self.stats["skipped"] += 1
-                    continue
-
-                try:
-                    await self._reprocess_item(
-                        item,
-                        dry_run=dry_run,
-                        entities_only=entities_only,
-                        skip_entities=skip_entities,
-                    )
-                    self.stats["processed"] += 1
-                except Exception as e:
-                    logger.error(f"Error processing content {item.id} ({item.title}): {e}")
-                    self.stats["errors"] += 1
-
-            # Move to next batch
+            await self._process_batch(items, dry_run, entities_only, skip_entities)
             offset += limit
             batch_num += 1
-
-            # Stop if we've processed all items
             if offset >= total:
                 break
 
-        # Log summary
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info("=" * 80)
-        logger.info("Reprocessing complete!")
-        logger.info(f"Duration: {duration:.2f} seconds")
-        logger.info(f"Total items: {self.stats['total']}")
-        logger.info(f"Processed: {self.stats['processed']}")
-        logger.info(f"Skipped: {self.stats['skipped']}")
-        logger.info(f"Errors: {self.stats['errors']}")
-        if not entities_only:
-            logger.info(f"Tags updated: {self.stats['tags_updated']}")
-            logger.info(f"Links created: {self.stats['links_created']}")
-        if not skip_entities:
-            logger.info(f"Pipeline jobs submitted: {self.stats['pipeline_jobs_submitted']}")
-        logger.info("=" * 80)
+        self._log_summary(duration, entities_only, skip_entities)
+
+    def _is_markdown(self, item) -> bool:
+        """Return True if the item is a markdown document."""
+        return item.mime_type == "text/markdown" or (
+            item.file_path and item.file_path.endswith(".md")
+        )
+
+    async def _reprocess_pkm(self, item, dry_run: bool) -> None:
+        """Run PKM reprocessing (tags + links) for a single item."""
+        if item.content_type == "youtube":
+            await self._reprocess_youtube(item, dry_run)
+        elif self._is_markdown(item):
+            await self._reprocess_markdown(item, dry_run)
+        else:
+            logger.info(f"  Skipping non-markdown content: {item.mime_type}")
 
     async def _reprocess_item(
         self,
@@ -158,39 +171,17 @@ class ContentReprocessor:
         entities_only: bool = False,
         skip_entities: bool = False,
     ) -> None:
-        """Reprocess a single content item.
+        """Reprocess a single content item."""
+        logger.info(f"Processing {item.content_type}: {item.id} - {item.title}")
 
-        Args:
-            item: ContentMetadata object
-            dry_run: If True, preview changes without applying them
-            entities_only: If True, only run entity extraction
-            skip_entities: If True, skip entity extraction
-        """
-        content_id = item.id
-        content_type = item.content_type
+        if entities_only and getattr(item, "processing_status", None) == "completed":
+            logger.info("  Pipeline processing already completed, skipping")
+            self.stats["skipped"] += 1
+            return
 
-        logger.info(f"Processing {content_type}: {content_id} - {item.title}")
-
-        # Check if pipeline already done (skip if --entities-only and completed)
-        if entities_only:
-            processing_status = getattr(item, "processing_status", None)
-            if processing_status == "completed":
-                logger.info("  Pipeline processing already completed, skipping")
-                self.stats["skipped"] += 1
-                return
-
-        # Original PKM reprocessing (tags, links)
         if not entities_only:
-            if content_type == "youtube":
-                await self._reprocess_youtube(item, dry_run)
-            elif item.mime_type == "text/markdown" or (
-                item.file_path and item.file_path.endswith(".md")
-            ):
-                await self._reprocess_markdown(item, dry_run)
-            else:
-                logger.info(f"  Skipping non-markdown content: {item.mime_type}")
+            await self._reprocess_pkm(item, dry_run)
 
-        # Unified pipeline processing
         if not skip_entities and self.orchestrator:
             await self._reprocess_pipeline(item, dry_run)
 
@@ -277,154 +268,117 @@ class ContentReprocessor:
 
         return None
 
+    async def _apply_tag_update(self, item, merged_tags: list, dry_run: bool) -> None:
+        """Persist merged tags to the content record unless dry_run."""
+        if dry_run:
+            logger.info(f"  [DRY RUN] Would update tags to: {merged_tags}")
+        else:
+            item.tags = merged_tags
+            await self.surreal_repo.update_content(item.id, item)
+            self.stats["tags_updated"] += 1
+
+    def _compute_new_tags(self, item, tags_from_source: list) -> list:
+        """Return tags from source that are not yet on item. Empty list if none."""
+        existing = set(item.tags or [])
+        return [t for t in tags_from_source if t not in existing]
+
     async def _reprocess_youtube(self, item, dry_run: bool) -> None:
-        """Reprocess YouTube video to extract tags from metadata.json.
-
-        Args:
-            item: ContentMetadata for YouTube video
-            dry_run: If True, preview changes without applying them
-        """
-        content_id = item.id
+        """Reprocess YouTube video to extract tags from metadata.json."""
         video_id = item.metadata.get("video_id") if item.metadata else None
-
         if not video_id:
-            logger.warning(f"  No video_id in metadata for {content_id}")
+            logger.warning(f"  No video_id in metadata for {item.id}")
             return
 
-        # Construct metadata.json path
-        metadata_path = f"youtube/{video_id}/metadata.json"
-
         try:
-            # Fetch metadata.json from MinIO
-            metadata_bytes = await self.minio_storage.download(metadata_path)
-            metadata_dict = json.loads(metadata_bytes.decode("utf-8"))
-
-            # Extract tags from metadata.json
-            tags_from_metadata = metadata_dict.get("tags", [])
-
-            if not tags_from_metadata:
-                logger.info(f"  No tags in metadata.json for {video_id}")
-                return
-
-            # Merge with existing tags in DB (avoid duplicates)
-            existing_tags = set(item.tags or [])
-            new_tags = [tag for tag in tags_from_metadata if tag not in existing_tags]
-
-            if not new_tags:
-                logger.info(f"  All tags already present in DB for {video_id}")
-                return
-
-            merged_tags = list(existing_tags) + new_tags
-            logger.info(
-                f"  Found {len(tags_from_metadata)} tags in metadata.json, "
-                f"adding {len(new_tags)} new tags"
-            )
-
-            if not dry_run:
-                # Update content tags
-                item.tags = merged_tags
-                await self.surreal_repo.update_content(content_id, item)
-                self.stats["tags_updated"] += 1
-            else:
-                logger.info(f"  [DRY RUN] Would update tags to: {merged_tags}")
-
+            metadata_bytes = await self.minio_storage.download(f"youtube/{video_id}/metadata.json")
+            tags_from_metadata = json.loads(metadata_bytes.decode("utf-8")).get("tags", [])
         except Exception as e:
             logger.error(f"  Failed to fetch or parse metadata.json: {e}")
             raise
 
-    async def _reprocess_markdown(self, item, dry_run: bool) -> None:
-        """Reprocess markdown content to extract frontmatter and links.
+        if not tags_from_metadata:
+            logger.info(f"  No tags in metadata.json for {video_id}")
+            return
 
-        Args:
-            item: ContentMetadata for markdown document
-            dry_run: If True, preview changes without applying them
-        """
-        content_id = item.id
-        file_path = item.file_path
+        new_tags = self._compute_new_tags(item, tags_from_metadata)
+        if not new_tags:
+            logger.info(f"  All tags already present in DB for {video_id}")
+            return
 
-        try:
-            # Fetch content from MinIO
-            content_bytes = await self.minio_storage.download(file_path)
-            content_text = content_bytes.decode("utf-8")
+        logger.info(
+            f"  Found {len(tags_from_metadata)} tags in metadata.json, "
+            f"adding {len(new_tags)} new tags"
+        )
+        await self._apply_tag_update(item, list(set(item.tags or [])) + new_tags, dry_run)
 
-            # Parse frontmatter
-            body, frontmatter_metadata = self.frontmatter_parser.parse(content_text)
-
-            # Extract tags from frontmatter
-            tags_from_frontmatter = self.frontmatter_parser.extract_tags(
-                frontmatter_metadata, explicit_tags=None
-            )
-
-            # Merge with existing tags (avoid duplicates)
-            existing_tags = set(item.tags or [])
-            new_tags = [tag for tag in tags_from_frontmatter if tag not in existing_tags]
-
-            tags_updated = False
-            if new_tags:
-                merged_tags = list(existing_tags) + new_tags
+    async def _create_links(self, content_id: str, extracted_links: list) -> None:
+        """Delete old links and create new resolved links for a content item."""
+        await self.surreal_repo.delete_links_by_source(content_id)
+        for link in extracted_links:
+            target_id = None
+            target_content = await self.surreal_repo.find_content_by_title(link.target)
+            if target_content and target_content.id:
+                target_id = target_content.id
                 logger.info(
-                    f"  Found {len(tags_from_frontmatter)} tags in frontmatter, "
-                    f"adding {len(new_tags)} new tags"
+                    f"    Resolved link '{link.link_text}' -> '{link.target}' to {target_id}"
                 )
-                tags_updated = True
-
-                if not dry_run:
-                    item.tags = merged_tags
-                    await self.surreal_repo.update_content(content_id, item)
-                    self.stats["tags_updated"] += 1
-                else:
-                    logger.info(f"  [DRY RUN] Would update tags to: {merged_tags}")
             else:
-                logger.info("  No new tags from frontmatter")
+                logger.info(f"    Unresolved link '{link.link_text}' -> '{link.target}'")
+            await self.surreal_repo.create_link(
+                LinkModel(
+                    source=content_id,
+                    target=target_id,
+                    link_text=link.link_text,
+                    link_type=link.link_type,
+                )
+            )
+            self.stats["links_created"] += 1
 
-            # Extract links
-            extracted_links = self.link_extractor.extract_links(content_text)
+    async def _reprocess_markdown_tags(self, item, content_text: str, dry_run: bool) -> bool:
+        """Extract and apply frontmatter tags. Returns True if tags were updated."""
+        _, frontmatter_metadata = self.frontmatter_parser.parse(content_text)
+        tags_from_frontmatter = self.frontmatter_parser.extract_tags(
+            frontmatter_metadata, explicit_tags=None
+        )
+        existing_tags = set(item.tags or [])
+        new_tags = [t for t in tags_from_frontmatter if t not in existing_tags]
+        if not new_tags:
+            logger.info("  No new tags from frontmatter")
+            return False
+        logger.info(
+            f"  Found {len(tags_from_frontmatter)} tags in frontmatter, "
+            f"adding {len(new_tags)} new tags"
+        )
+        await self._apply_tag_update(item, list(existing_tags) + new_tags, dry_run)
+        return True
 
-            if not extracted_links:
-                logger.info("  No links found in content")
-                if not tags_updated:
-                    self.stats["skipped"] += 1
-                return
-
-            logger.info(f"  Found {len(extracted_links)} links")
-
-            if not dry_run:
-                # Delete existing links for idempotency
-                await self.surreal_repo.delete_links_by_source(content_id)
-
-                # Create new links
-                for link in extracted_links:
-                    # Try to resolve link target by title
-                    target_id = None
-                    target_content = await self.surreal_repo.find_content_by_title(link.target)
-                    if target_content and target_content.id:
-                        target_id = target_content.id
-                        logger.info(
-                            f"    Resolved link '{link.link_text}' -> "
-                            f"'{link.target}' to content {target_id}"
-                        )
-                    else:
-                        logger.info(f"    Unresolved link '{link.link_text}' -> '{link.target}'")
-
-                    # Store link
-                    link_model = LinkModel(
-                        source=content_id,
-                        target=target_id,
-                        link_text=link.link_text,
-                        link_type=link.link_type,
-                    )
-                    await self.surreal_repo.create_link(link_model)
-                    self.stats["links_created"] += 1
-            else:
-                logger.info(f"  [DRY RUN] Would create {len(extracted_links)} links:")
-                for link in extracted_links[:5]:  # Show first 5
-                    logger.info(f"    - {link.link_type}: '{link.link_text}' -> '{link.target}'")
-                if len(extracted_links) > 5:
-                    logger.info(f"    ... and {len(extracted_links) - 5} more")
-
+    async def _reprocess_markdown(self, item, dry_run: bool) -> None:
+        """Reprocess markdown content to extract frontmatter and links."""
+        try:
+            content_bytes = await self.minio_storage.download(item.file_path)
+            content_text = content_bytes.decode("utf-8")
         except Exception as e:
             logger.error(f"  Failed to fetch or process markdown content: {e}")
             raise
+
+        tags_updated = await self._reprocess_markdown_tags(item, content_text, dry_run)
+        extracted_links = self.link_extractor.extract_links(content_text)
+
+        if not extracted_links:
+            logger.info("  No links found in content")
+            if not tags_updated:
+                self.stats["skipped"] += 1
+            return
+
+        logger.info(f"  Found {len(extracted_links)} links")
+        if not dry_run:
+            await self._create_links(item.id, extracted_links)
+        else:
+            logger.info(f"  [DRY RUN] Would create {len(extracted_links)} links:")
+            for link in extracted_links[:5]:
+                logger.info(f"    - {link.link_type}: '{link.link_text}' -> '{link.target}'")
+            if len(extracted_links) > 5:
+                logger.info(f"    ... and {len(extracted_links) - 5} more")
 
 
 def _create_pipeline_orchestrator(surreal_repo: SurrealDBRepository):

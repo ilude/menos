@@ -13,26 +13,39 @@ from menos.config import settings
 DANGEROUS_PREFIXES = ("DELETE", "UPDATE", "CREATE", "REMOVE", "DEFINE")
 
 
+def _stringify_record_ids(row: dict) -> dict:
+    """Convert RecordID values in a row dict to strings."""
+    return {k: str(v.id) if hasattr(v, "id") else v for k, v in row.items()}
+
+
 def parse_results(result):
     """Parse SurrealDB v2 query results into a flat list of dicts."""
     if not result or not isinstance(result, list) or len(result) == 0:
         return []
+    first = result[0]
+    raw_items = first["result"] if isinstance(first, dict) and "result" in first else result
+    return [_stringify_record_ids(dict(item)) for item in raw_items]
 
-    # Handle both old format (wrapped in result key) and new format (direct list)
-    if isinstance(result[0], dict) and "result" in result[0]:
-        raw_items = result[0]["result"]
-    else:
-        raw_items = result
 
-    items = []
-    for item in raw_items:
-        row = dict(item)
-        # Convert RecordID objects to strings
-        for key, value in row.items():
-            if hasattr(value, "id"):
-                row[key] = str(value.id)
-        items.append(row)
-    return items
+def _collect_columns(rows: list) -> list:
+    """Return ordered unique column names from all rows."""
+    seen: set = set()
+    columns = []
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                columns.append(key)
+                seen.add(key)
+    return columns
+
+
+def _compute_widths(columns: list, rows: list) -> dict:
+    """Compute per-column display widths (capped at 80)."""
+    widths = {}
+    for col in columns:
+        values = [str(row.get(col, "")) for row in rows]
+        widths[col] = min(max(len(col), max((len(v) for v in values), default=0)), 80)
+    return widths
 
 
 def format_table(rows):
@@ -41,33 +54,14 @@ def format_table(rows):
         print("(no results)")
         return
 
-    # Collect all keys across all rows
-    columns = []
-    seen = set()
-    for row in rows:
-        for key in row:
-            if key not in seen:
-                columns.append(key)
-                seen.add(key)
+    columns = _collect_columns(rows)
+    widths = _compute_widths(columns, rows)
 
-    # Compute column widths
-    widths = {}
-    for col in columns:
-        values = [str(row.get(col, "")) for row in rows]
-        widths[col] = max(len(col), max((len(v) for v in values), default=0))
-        # Cap width to avoid extremely wide columns
-        widths[col] = min(widths[col], 80)
-
-    # Print header
-    header = "  ".join(col.ljust(widths[col]) for col in columns)
-    print(header)
+    print("  ".join(col.ljust(widths[col]) for col in columns))
     print("  ".join("-" * widths[col] for col in columns))
-
-    # Print rows
     for row in rows:
-        line = "  ".join(str(row.get(col, "")).ljust(widths[col])[:widths[col]] for col in columns)
+        line = "  ".join(str(row.get(col, "")).ljust(widths[col])[: widths[col]] for col in columns)
         print(line)
-
     print(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''})")
 
 

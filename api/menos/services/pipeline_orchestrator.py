@@ -90,6 +90,64 @@ class PipelineOrchestrator:
 
         return job
 
+    async def _mark_failed(self, job_id: str, content_id: str, **kwargs) -> None:
+        """Best-effort: mark job and content as failed. Swallows secondary errors."""
+        try:
+            await self.job_repo.update_job_status(job_id, JobStatus.FAILED, **kwargs)
+            await self.surreal_repo.update_content_processing_status(content_id, "failed")
+        except Exception as inner_e:
+            logger.error("Failed to update job status for %s: %s", job_id, inner_e)
+
+    async def _handle_result(self, job: PipelineJob, job_id: str, content_id: str, result) -> None:
+        """Persist a successful pipeline result and fire the callback."""
+        result_dict = result.model_dump(mode="json")
+        await self.surreal_repo.update_content_processing_result(
+            content_id, result_dict, self.settings.app_version
+        )
+        updated_job = await self.job_repo.update_job_status(job_id, JobStatus.COMPLETED)
+        logger.info("Pipeline completed for job %s", job_id)
+        await self._fire_callback(updated_job or job, result_dict)
+
+    async def _handle_no_result(self, job: PipelineJob, job_id: str, content_id: str) -> None:
+        """Handle a pipeline run that returned no result."""
+        updated_job = await self.job_repo.update_job_status(
+            job_id,
+            JobStatus.FAILED,
+            error_code="PIPELINE_NO_RESULT",
+            error_message="Pipeline returned no result",
+        )
+        await self.surreal_repo.update_content_processing_status(content_id, "failed")
+        logger.warning("Pipeline returned no result for job %s", job_id)
+        await self._fire_callback(updated_job or job)
+
+    async def _execute_pipeline(
+        self,
+        job: PipelineJob,
+        job_id: str,
+        content_id: str,
+        content_text: str,
+        content_type: str,
+        title: str,
+    ) -> None:
+        """Run pipeline inside the semaphore (already held by caller)."""
+        current_job = await self.job_repo.get_job(job_id)
+        if current_job and current_job.status == JobStatus.CANCELLED:
+            logger.info("Job %s was cancelled before processing", job_id)
+            return
+        await self.job_repo.update_job_status(job_id, JobStatus.PROCESSING)
+        await self.surreal_repo.update_content_processing_status(content_id, "processing")
+        result = await self.pipeline_service.process(
+            content_id=content_id,
+            content_text=content_text,
+            content_type=content_type,
+            title=title,
+            job_id=job_id,
+        )
+        if result:
+            await self._handle_result(job, job_id, content_id, result)
+        else:
+            await self._handle_no_result(job, job_id, content_id)
+
     async def _run_pipeline(
         self,
         job: PipelineJob,
@@ -97,61 +155,15 @@ class PipelineOrchestrator:
         content_type: str,
         title: str,
     ) -> None:
-        """Run the unified pipeline for a job.
-
-        Args:
-            job: Pipeline job
-            content_text: Full content text
-            content_type: Type of content
-            title: Content title
-        """
+        """Run the unified pipeline for a job."""
         job_id = job.id or ""
         content_id = job.content_id
         sem = _get_semaphore(self.settings.unified_pipeline_max_concurrency)
-
         try:
             async with sem:
-                # Re-read job to check for cancellation
-                current_job = await self.job_repo.get_job(job_id)
-                if current_job and current_job.status == JobStatus.CANCELLED:
-                    logger.info("Job %s was cancelled before processing", job_id)
-                    return
-
-                # Transition to processing
-                await self.job_repo.update_job_status(job_id, JobStatus.PROCESSING)
-                await self.surreal_repo.update_content_processing_status(content_id, "processing")
-
-                # Run pipeline
-                result = await self.pipeline_service.process(
-                    content_id=content_id,
-                    content_text=content_text,
-                    content_type=content_type,
-                    title=title,
-                    job_id=job_id,
+                await self._execute_pipeline(
+                    job, job_id, content_id, content_text, content_type, title
                 )
-
-                if result:
-                    # Store result and mark completed
-                    result_dict = result.model_dump(mode="json")
-                    await self.surreal_repo.update_content_processing_result(
-                        content_id,
-                        result_dict,
-                        self.settings.app_version,
-                    )
-                    updated_job = await self.job_repo.update_job_status(job_id, JobStatus.COMPLETED)
-                    logger.info("Pipeline completed for job %s", job_id)
-                    await self._fire_callback(updated_job or job, result_dict)
-                else:
-                    updated_job = await self.job_repo.update_job_status(
-                        job_id,
-                        JobStatus.FAILED,
-                        error_code="PIPELINE_NO_RESULT",
-                        error_message="Pipeline returned no result",
-                    )
-                    await self.surreal_repo.update_content_processing_status(content_id, "failed")
-                    logger.warning("Pipeline returned no result for job %s", job_id)
-                    await self._fire_callback(updated_job or job)
-
         except asyncio.CancelledError:
             logger.warning("Pipeline cancelled for job %s (shutdown?)", job_id)
             try:
@@ -161,50 +173,23 @@ class PipelineOrchestrator:
                 pass
             raise
         except PipelineStageError as e:
-            logger.error(
-                "Pipeline stage error for job %s: %s",
+            logger.error("Pipeline stage error for job %s: %s", job_id, e, exc_info=True)
+            await self._mark_failed(
                 job_id,
-                e,
-                exc_info=True,
+                content_id,
+                error_code=e.code,
+                error_message=e.message[:500],
+                error_stage=e.stage,
             )
-            try:
-                await self.job_repo.update_job_status(
-                    job_id,
-                    JobStatus.FAILED,
-                    error_code=e.code,
-                    error_message=e.message[:500],
-                    error_stage=e.stage,
-                )
-                await self.surreal_repo.update_content_processing_status(
-                    content_id,
-                    "failed",
-                )
-            except Exception as inner_e:
-                logger.error(
-                    "Failed to update job status for %s: %s",
-                    job_id,
-                    inner_e,
-                )
         except Exception as e:
             logger.error("Pipeline failed for job %s: %s", job_id, e, exc_info=True)
-            try:
-                await self.job_repo.update_job_status(
-                    job_id,
-                    JobStatus.FAILED,
-                    error_code="PIPELINE_EXCEPTION",
-                    error_message=str(e)[:500],
-                    error_stage="unknown",
-                )
-                await self.surreal_repo.update_content_processing_status(
-                    content_id,
-                    "failed",
-                )
-            except Exception as inner_e:
-                logger.error(
-                    "Failed to update job status for %s: %s",
-                    job_id,
-                    inner_e,
-                )
+            await self._mark_failed(
+                job_id,
+                content_id,
+                error_code="PIPELINE_EXCEPTION",
+                error_message=str(e)[:500],
+                error_stage="unknown",
+            )
 
     async def _fire_callback(
         self,

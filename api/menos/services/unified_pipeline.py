@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -183,6 +184,167 @@ class PipelineStageError(Exception):
         super().__init__(f"[{stage}] {code}: {message}")
 
 
+def _parse_tier_and_score(data: dict[str, Any]) -> tuple[str, int]:
+    """Extract and validate tier + quality score from LLM data."""
+    tier = str(data.get("tier", "C")).upper()
+    if tier not in VALID_TIERS:
+        tier = "C"
+    raw_score = data.get("quality_score", 50)
+    try:
+        score = int(raw_score)
+    except (ValueError, TypeError):
+        score = 50
+    return tier, max(1, min(100, score))
+
+
+def _apply_new_tag(
+    new_tag: str,
+    tags: list[str],
+    new_tags: list[str],
+    existing_tags: list[str],
+    alias_mappings: list[tuple[str, str]] | None,
+) -> None:
+    """Apply a single candidate new tag: dedup against existing, record alias or append."""
+    existing_match = _dedup_label(new_tag, existing_tags + tags)
+    if existing_match:
+        if alias_mappings is not None and normalize_name(new_tag) != normalize_name(existing_match):
+            alias_mappings.append((new_tag, existing_match))
+        if existing_match not in tags:
+            tags.append(existing_match)
+    elif new_tag not in tags:
+        tags.append(new_tag)
+        new_tags.append(new_tag)
+
+
+def _valid_labels(raw: Any) -> list[str]:
+    """Return only valid label strings from a raw list."""
+    if not isinstance(raw, list):
+        return []
+    return [t for t in raw if isinstance(t, str) and LABEL_PATTERN.match(t)]
+
+
+def _parse_tags(
+    data: dict[str, Any],
+    existing_tags: list[str],
+    settings: Settings,
+    alias_mappings: list[tuple[str, str]] | None,
+) -> tuple[list[str], list[str]]:
+    """Extract and dedup tags + new_tags from LLM data."""
+    tags = _valid_labels(data.get("tags", []))
+    new_tags: list[str] = []
+    max_new = settings.unified_pipeline_max_new_tags
+    for new_tag in _valid_labels(data.get("new_tags", [])):
+        if len(new_tags) >= max_new:
+            break
+        _apply_new_tag(new_tag, tags, new_tags, existing_tags, alias_mappings)
+    return tags, new_tags
+
+
+def _parse_explanations(data: dict[str, Any]) -> tuple[list[str], list[str], str]:
+    """Extract tier_explanation, score_explanation, and summary from LLM data."""
+    tier_explanation = data.get("tier_explanation", [])
+    if not isinstance(tier_explanation, list):
+        tier_explanation = []
+    tier_explanation = [str(e) for e in tier_explanation if e]
+
+    score_explanation = data.get("score_explanation", [])
+    if not isinstance(score_explanation, list):
+        score_explanation = []
+    score_explanation = [str(e) for e in score_explanation if e]
+
+    summary = data.get("summary", "")
+    if not isinstance(summary, str):
+        summary = ""
+    return tier_explanation, score_explanation, summary
+
+
+def _parse_topics(data: dict[str, Any], settings: Settings) -> list[ExtractedEntity]:
+    """Extract topic entities from LLM data."""
+    topics: list[ExtractedEntity] = []
+    raw_topics = data.get("topics", [])
+    if not isinstance(raw_topics, list):
+        return topics
+    for topic_data in raw_topics:
+        if not isinstance(topic_data, dict):
+            continue
+        name = topic_data.get("name", "")
+        if not name:
+            continue
+        if len(topics) >= settings.entity_max_topics_per_content:
+            break
+        confidence = topic_data.get("confidence", "medium")
+        if _confidence_to_float(confidence) < settings.entity_min_confidence:
+            continue
+        hierarchy = _parse_topic_hierarchy(name)
+        topics.append(
+            ExtractedEntity(
+                entity_type=EntityType.TOPIC,
+                name=hierarchy[-1] if hierarchy else name,
+                confidence=confidence,
+                edge_type=_edge_type_from_string(topic_data.get("edge_type", "discusses")),
+                hierarchy=hierarchy,
+            )
+        )
+    return topics
+
+
+def _parse_validations(data: dict[str, Any]) -> list[PreDetectedValidation]:
+    """Extract pre-detected entity validations from LLM data."""
+    validations: list[PreDetectedValidation] = []
+    for val_data in data.get("pre_detected_validations", []):
+        if not isinstance(val_data, dict):
+            continue
+        entity_id = val_data.get("entity_id", "")
+        if not entity_id:
+            continue
+        validations.append(
+            PreDetectedValidation(
+                entity_id=entity_id,
+                edge_type=_edge_type_from_string(val_data.get("edge_type", "mentions")),
+                confirmed=val_data.get("confirmed", True),
+            )
+        )
+    return validations
+
+
+def _parse_additional_entities(data: dict[str, Any], settings: Settings) -> list[ExtractedEntity]:
+    """Extract additional (non-pre-detected) entities from LLM data."""
+    additional: list[ExtractedEntity] = []
+    for ent_data in data.get("additional_entities", []):
+        if not isinstance(ent_data, dict):
+            continue
+        name = ent_data.get("name", "")
+        if not name:
+            continue
+        confidence = ent_data.get("confidence", "medium")
+        if _confidence_to_float(confidence) < settings.entity_min_confidence:
+            continue
+        additional.append(
+            ExtractedEntity(
+                entity_type=_entity_type_from_string(ent_data.get("type", "tool")),
+                name=name,
+                confidence=confidence,
+                edge_type=_edge_type_from_string(ent_data.get("edge_type", "mentions")),
+                hierarchy=None,
+            )
+        )
+    return additional
+
+
+_RECOGNIZED_FIELDS = frozenset(
+    {
+        "tags",
+        "new_tags",
+        "tier",
+        "quality_score",
+        "topics",
+        "pre_detected_validations",
+        "additional_entities",
+        "summary",
+    }
+)
+
+
 def parse_unified_response(
     data: dict[str, Any],
     existing_tags: list[str],
@@ -199,168 +361,15 @@ def parse_unified_response(
     Returns:
         UnifiedResult or None if payload is malformed
     """
-    if not data:
+    if not data or not any(k in data for k in _RECOGNIZED_FIELDS):
         return None
 
-    # Require at least one recognizable field to consider it valid
-    recognized = {
-        "tags",
-        "new_tags",
-        "tier",
-        "quality_score",
-        "topics",
-        "pre_detected_validations",
-        "additional_entities",
-        "summary",
-    }
-    if not any(k in data for k in recognized):
-        return None
-
-    # --- Classification fields ---
-
-    # Validate tier
-    tier = str(data.get("tier", "C")).upper()
-    if tier not in VALID_TIERS:
-        tier = "C"
-
-    # Validate and clamp score
-    raw_score = data.get("quality_score", 50)
-    try:
-        score = int(raw_score)
-    except (ValueError, TypeError):
-        score = 50
-    score = max(1, min(100, score))
-
-    # Validate tags
-    raw_tags = data.get("tags", [])
-    if not isinstance(raw_tags, list):
-        raw_tags = []
-    tags = [t for t in raw_tags if isinstance(t, str) and LABEL_PATTERN.match(t)]
-
-    # Process new tags with deterministic dedup
-    raw_new_tags = data.get("new_tags", [])
-    if not isinstance(raw_new_tags, list):
-        raw_new_tags = []
-
-    new_tags: list[str] = []
-    max_new = settings.unified_pipeline_max_new_tags
-    new_count = 0
-    for new_tag in raw_new_tags:
-        if new_count >= max_new:
-            break
-        if not isinstance(new_tag, str) or not LABEL_PATTERN.match(new_tag):
-            continue
-
-        existing_match = _dedup_label(new_tag, existing_tags + tags)
-        if existing_match:
-            if alias_mappings is not None and normalize_name(new_tag) != normalize_name(
-                existing_match
-            ):
-                alias_mappings.append((new_tag, existing_match))
-            if existing_match not in tags:
-                tags.append(existing_match)
-        else:
-            if new_tag not in tags:
-                tags.append(new_tag)
-                new_tags.append(new_tag)
-                new_count += 1
-
-    # Validate explanations
-    tier_explanation = data.get("tier_explanation", [])
-    if not isinstance(tier_explanation, list):
-        tier_explanation = []
-    tier_explanation = [str(e) for e in tier_explanation if e]
-
-    score_explanation = data.get("score_explanation", [])
-    if not isinstance(score_explanation, list):
-        score_explanation = []
-    score_explanation = [str(e) for e in score_explanation if e]
-
-    # Extract summary
-    summary = data.get("summary", "")
-    if not isinstance(summary, str):
-        summary = ""
-
-    # --- Entity extraction fields ---
-
-    # Parse topics
-    topics: list[ExtractedEntity] = []
-    raw_topics = data.get("topics", [])
-    if not isinstance(raw_topics, list):
-        raw_topics = []
-
-    for topic_data in raw_topics:
-        if not isinstance(topic_data, dict):
-            continue
-
-        name = topic_data.get("name", "")
-        if not name:
-            continue
-
-        if len(topics) >= settings.entity_max_topics_per_content:
-            break
-
-        confidence = topic_data.get("confidence", "medium")
-        conf_value = _confidence_to_float(confidence)
-        if conf_value < settings.entity_min_confidence:
-            continue
-
-        hierarchy = _parse_topic_hierarchy(name)
-        edge_type = topic_data.get("edge_type", "discusses")
-
-        topics.append(
-            ExtractedEntity(
-                entity_type=EntityType.TOPIC,
-                name=hierarchy[-1] if hierarchy else name,
-                confidence=confidence,
-                edge_type=_edge_type_from_string(edge_type),
-                hierarchy=hierarchy,
-            )
-        )
-
-    # Parse pre-detected validations
-    validations: list[PreDetectedValidation] = []
-    for val_data in data.get("pre_detected_validations", []):
-        if not isinstance(val_data, dict):
-            continue
-
-        entity_id = val_data.get("entity_id", "")
-        if not entity_id:
-            continue
-
-        validations.append(
-            PreDetectedValidation(
-                entity_id=entity_id,
-                edge_type=_edge_type_from_string(val_data.get("edge_type", "mentions")),
-                confirmed=val_data.get("confirmed", True),
-            )
-        )
-
-    # Parse additional entities
-    additional: list[ExtractedEntity] = []
-    for ent_data in data.get("additional_entities", []):
-        if not isinstance(ent_data, dict):
-            continue
-
-        name = ent_data.get("name", "")
-        ent_type = ent_data.get("type", "tool")
-        if not name:
-            continue
-
-        confidence = ent_data.get("confidence", "medium")
-        conf_value = _confidence_to_float(confidence)
-        if conf_value < settings.entity_min_confidence:
-            continue
-
-        additional.append(
-            ExtractedEntity(
-                entity_type=_entity_type_from_string(ent_type),
-                name=name,
-                confidence=confidence,
-                edge_type=_edge_type_from_string(ent_data.get("edge_type", "mentions")),
-                hierarchy=None,
-            )
-        )
+    tier, score = _parse_tier_and_score(data)
+    tags, new_tags = _parse_tags(data, existing_tags, settings, alias_mappings)
+    tier_explanation, score_explanation, summary = _parse_explanations(data)
+    topics = _parse_topics(data, settings)
+    validations = _parse_validations(data)
+    additional = _parse_additional_entities(data, settings)
 
     return UnifiedResult(
         tags=tags,
@@ -374,6 +383,36 @@ def parse_unified_response(
         pre_detected_validations=validations,
         additional_entities=additional,
     )
+
+
+@dataclass
+class _ProcessOptions:
+    """Optional parameters for UnifiedPipelineService.process."""
+
+    pre_detected: list
+    existing_topics: list[str] | None
+    job_id: str | None
+
+
+@dataclass
+class _ContentRequest:
+    """Required content fields for a pipeline run."""
+
+    content_id: str
+    content_text: str
+    content_type: str
+    title: str
+
+
+@dataclass
+class _PromptContext:
+    """Fetched context needed to build the LLM prompt."""
+
+    existing_tags: list[str]
+    prompt_topics: list[str]
+    tag_cooccurrence: dict
+    tier_distribution: dict
+    known_aliases: dict
 
 
 class UnifiedPipelineService:
@@ -450,54 +489,22 @@ class UnifiedPipelineService:
                 topics.append(topic.name)
         return topics
 
-    async def process(
-        self,
-        content_id: str,
-        content_text: str,
-        content_type: str,
-        title: str,
-        pre_detected: list | None = None,
-        existing_topics: list[str] | None = None,
-        job_id: str | None = None,
-    ) -> UnifiedResult | None:
-        """Run unified classification + entity extraction pipeline.
-
-        Args:
-            content_id: Content ID
-            content_text: Full content text
-            content_type: Type of content (youtube, markdown, etc.)
-            title: Content title
-            pre_detected: Pre-detected entity models
-            existing_topics: Known topic strings
-            job_id: Pipeline job ID for log correlation
-
-        Returns:
-            UnifiedResult or None if skipped/failed
-        """
-        if not self.settings.unified_pipeline_enabled:
-            logger.debug(
-                "Unified pipeline disabled, skipping %s job_id=%s",
-                content_id,
-                job_id,
-            )
-            return None
-
-        pre_detected = pre_detected or []
-
-        # Truncate content to 10k chars
+    def _truncate_content(self, content_text: str, content_id: str, job_id: str | None) -> str:
         t0 = time.monotonic()
         truncated = content_text[:10000]
         if len(content_text) > 10000:
             truncated += "\n\n[Content truncated...]"
-        truncation_ms = int((time.monotonic() - t0) * 1000)
         logger.info(
             "stage.truncation job_id=%s content_id=%s ms=%d",
             job_id,
             content_id,
-            truncation_ms,
+            int((time.monotonic() - t0) * 1000),
         )
+        return truncated
 
-        # Fetch prompt context
+    async def _fetch_context(
+        self, content_id: str, job_id: str | None, existing_topics: list[str] | None
+    ) -> "_PromptContext":
         t0 = time.monotonic()
         try:
             (
@@ -520,17 +527,25 @@ class UnifiedPipelineService:
                 "CONTEXT_FETCH_ERROR",
                 str(e)[:500],
             ) from e
-        context_fetch_ms = int((time.monotonic() - t0) * 1000)
         logger.info(
             "stage.context_fetch job_id=%s content_id=%s ms=%d tags=%d topics=%d",
             job_id,
             content_id,
-            context_fetch_ms,
+            int((time.monotonic() - t0) * 1000),
             len(existing_tags),
             len(prompt_topics),
         )
+        return _PromptContext(
+            existing_tags=existing_tags,
+            prompt_topics=prompt_topics,
+            tag_cooccurrence=tag_cooccurrence,
+            tier_distribution=tier_distribution,
+            known_aliases=known_aliases,
+        )
 
-        # Format pre-detected entities for prompt
+    def _build_prompt(
+        self, req: "_ContentRequest", truncated: str, pre_detected: list, ctx: "_PromptContext"
+    ) -> str:
         pre_detected_json = json.dumps(
             [
                 {
@@ -542,30 +557,25 @@ class UnifiedPipelineService:
             ],
             indent=2,
         )
-
-        # Format prompt context
-        topics_str = ", ".join(prompt_topics[:20]) if prompt_topics else "None yet"
-        cooccurrence_str = self._format_cooccurrence(tag_cooccurrence)
-        distribution_str = self._format_distribution(tier_distribution)
-        aliases_str = self._format_aliases(known_aliases)
-
-        # Build prompt
-        prompt = UNIFIED_PROMPT_TEMPLATE.format(
-            content_type=content_type,
-            title=title,
-            existing_tags=(", ".join(existing_tags[:50]) if existing_tags else "None yet"),
+        return UNIFIED_PROMPT_TEMPLATE.format(
+            content_type=req.content_type,
+            title=req.title,
+            existing_tags=(", ".join(ctx.existing_tags[:50]) if ctx.existing_tags else "None yet"),
             pre_detected_entities_json=pre_detected_json,
-            existing_topics=topics_str,
-            tag_cooccurrence=cooccurrence_str,
-            tier_distribution=distribution_str,
-            known_aliases=aliases_str,
+            existing_topics=(
+                ", ".join(ctx.prompt_topics[:20]) if ctx.prompt_topics else "None yet"
+            ),
+            tag_cooccurrence=self._format_cooccurrence(ctx.tag_cooccurrence),
+            tier_distribution=self._format_distribution(ctx.tier_distribution),
+            known_aliases=self._format_aliases(ctx.known_aliases),
             max_new_tags=self.settings.unified_pipeline_max_new_tags,
             content_text=truncated,
         )
 
-        # Call LLM
+    async def _call_llm(
+        self, llm_provider: LLMProvider, prompt: str, content_id: str, job_id: str | None
+    ) -> str:
         t0 = time.monotonic()
-        llm_provider = self._provider_for_job(job_id)
         try:
             response = await llm_provider.generate(
                 prompt,
@@ -579,17 +589,23 @@ class UnifiedPipelineService:
                 "LLM_CALL_ERROR",
                 str(e)[:500],
             ) from e
-        llm_ms = int((time.monotonic() - t0) * 1000)
-        token_estimate = len(prompt) // 4 + len(response) // 4
         logger.info(
             "stage.llm_call job_id=%s content_id=%s ms=%d token_est=%d",
             job_id,
             content_id,
-            llm_ms,
-            token_estimate,
+            int((time.monotonic() - t0) * 1000),
+            len(prompt) // 4 + len(response) // 4,
         )
+        return response
 
-        # Parse response (with one retry if JSON extraction fails)
+    async def _parse_llm_response(
+        self,
+        llm_provider: LLMProvider,
+        response: str,
+        existing_tags: list[str],
+        content_id: str,
+        job_id: str | None,
+    ) -> tuple[UnifiedResult, list[tuple[str, str]]]:
         t0 = time.monotonic()
         data = extract_json(response)
         if not data:
@@ -631,18 +647,27 @@ class UnifiedPipelineService:
                 "PARSE_FAILED",
                 f"Failed to parse unified response for {content_id}",
             )
-        parse_ms = int((time.monotonic() - t0) * 1000)
         logger.info(
             "stage.parse job_id=%s content_id=%s ms=%d",
             job_id,
             content_id,
-            parse_ms,
+            int((time.monotonic() - t0) * 1000),
         )
+        return result, alias_mappings
 
-        # Record model name and timestamp
+    async def _run_pipeline(
+        self, req: "_ContentRequest", opts: "_ProcessOptions"
+    ) -> UnifiedResult | None:
+        truncated = self._truncate_content(req.content_text, req.content_id, opts.job_id)
+        ctx = await self._fetch_context(req.content_id, opts.job_id, opts.existing_topics)
+        prompt = self._build_prompt(req, truncated, opts.pre_detected, ctx)
+        llm_provider = self._provider_for_job(opts.job_id)
+        response = await self._call_llm(llm_provider, prompt, req.content_id, opts.job_id)
+        result, alias_mappings = await self._parse_llm_response(
+            llm_provider, response, ctx.existing_tags, req.content_id, opts.job_id
+        )
         result.model = getattr(llm_provider, "model", "fallback_chain")
         result.processed_at = datetime.now(UTC).isoformat()
-
         if alias_mappings:
             unique_aliases = sorted(set(alias_mappings))
             await asyncio.gather(
@@ -651,15 +676,54 @@ class UnifiedPipelineService:
                     for variant, canonical in unique_aliases
                 ]
             )
-
         logger.info(
             "pipeline.complete job_id=%s content_id=%s tier=%s score=%d tags=%s topics=%d",
-            job_id,
-            content_id,
+            opts.job_id,
+            req.content_id,
             result.tier,
             result.quality_score,
             result.tags,
             len(result.topics),
         )
-
         return result
+
+    async def process(
+        self,
+        content_id: str,
+        content_text: str,
+        content_type: str,
+        title: str,
+        **kwargs: Any,
+    ) -> UnifiedResult | None:
+        """Run unified classification + entity extraction pipeline.
+
+        Args:
+            content_id: Content ID
+            content_text: Full content text
+            content_type: Type of content (youtube, markdown, etc.)
+            title: Content title
+            **kwargs: pre_detected, existing_topics, job_id (all optional)
+
+        Returns:
+            UnifiedResult or None if skipped/failed
+        """
+        job_id = kwargs.get("job_id")
+        if not self.settings.unified_pipeline_enabled:
+            logger.debug(
+                "Unified pipeline disabled, skipping %s job_id=%s",
+                content_id,
+                job_id,
+            )
+            return None
+        req = _ContentRequest(
+            content_id=content_id,
+            content_text=content_text,
+            content_type=content_type,
+            title=title,
+        )
+        opts = _ProcessOptions(
+            pre_detected=kwargs.get("pre_detected") or [],
+            existing_topics=kwargs.get("existing_topics"),
+            job_id=job_id,
+        )
+        return await self._run_pipeline(req, opts)

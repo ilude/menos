@@ -1,13 +1,13 @@
 """Database models for SurrealDB."""
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class EntityType(str, Enum):
+class EntityType(StrEnum):
     """Types of entities that can be extracted from content."""
 
     TOPIC = "topic"
@@ -17,7 +17,7 @@ class EntityType(str, Enum):
     PERSON = "person"
 
 
-class EdgeType(str, Enum):
+class EdgeType(StrEnum):
     """Types of edges between content and entities."""
 
     DISCUSSES = "discusses"  # Primary subject matter of the content
@@ -27,7 +27,7 @@ class EdgeType(str, Enum):
     DEMONSTRATES = "demonstrates"  # Tutorial or walkthrough of the tool
 
 
-class EntitySource(str, Enum):
+class EntitySource(StrEnum):
     """Source of entity creation."""
 
     AI_EXTRACTED = "ai_extracted"
@@ -36,7 +36,7 @@ class EntitySource(str, Enum):
     API_FETCHED = "api_fetched"
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Status of a pipeline job."""
 
     PENDING = "pending"
@@ -46,7 +46,7 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class DataTier(str, Enum):
+class DataTier(StrEnum):
     """Data tier for pipeline processing depth."""
 
     COMPACT = "compact"

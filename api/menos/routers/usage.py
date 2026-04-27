@@ -95,19 +95,8 @@ def _parse_query_result(result: Any) -> list[dict[str, Any]]:
     return [row for row in result if isinstance(row, dict)]
 
 
-@router.get("", response_model=UsageResponse)
-async def get_usage(
-    key_id: AuthenticatedKeyId,
-    query: UsageQuery = Depends(_to_usage_query),
-    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
-    pricing_service: LLMPricingService = Depends(get_llm_pricing_service),
-):
-    """Return aggregated LLM usage totals and provider/model breakdown."""
-    del key_id
-
-    where_clause, params = _build_filters(query)
-
-    totals_result = surreal_repo.db.query(
+def _fetch_totals(surreal_repo: SurrealDBRepository, where_clause: str, params: dict) -> dict:
+    result = surreal_repo.db.query(
         f"""
         SELECT
             count() AS total_calls,
@@ -118,10 +107,12 @@ async def get_usage(
         """,
         params,
     )
-    totals_rows = _parse_query_result(totals_result)
-    totals = totals_rows[0] if totals_rows else {}
+    rows = _parse_query_result(result)
+    return rows[0] if rows else {}
 
-    breakdown_result = surreal_repo.db.query(
+
+def _fetch_breakdown(surreal_repo: SurrealDBRepository, where_clause: str, params: dict) -> list:
+    result = surreal_repo.db.query(
         f"""
         SELECT
             provider,
@@ -136,23 +127,37 @@ async def get_usage(
         """,
         params,
     )
-    breakdown_rows = _parse_query_result(breakdown_result)
+    return _parse_query_result(result)
 
+
+def _to_breakdown_item(item: dict) -> UsageBreakdownItem:
+    return UsageBreakdownItem(
+        provider=str(item.get("provider") or ""),
+        model=str(item.get("model") or ""),
+        calls=int(item.get("calls") or 0),
+        input_tokens=int(item.get("input_tokens") or 0),
+        output_tokens=int(item.get("output_tokens") or 0),
+        estimated_cost=float(item.get("estimated_cost") or 0.0),
+    )
+
+
+@router.get("", response_model=UsageResponse)
+async def get_usage(
+    key_id: AuthenticatedKeyId,
+    query: UsageQuery = Depends(_to_usage_query),
+    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+    pricing_service: LLMPricingService = Depends(get_llm_pricing_service),
+):
+    """Return aggregated LLM usage totals and provider/model breakdown."""
+    del key_id
+    where_clause, params = _build_filters(query)
+    totals = _fetch_totals(surreal_repo, where_clause, params)
+    breakdown_rows = _fetch_breakdown(surreal_repo, where_clause, params)
     return UsageResponse(
         total_calls=int(totals.get("total_calls") or 0),
         total_input_tokens=int(totals.get("total_input_tokens") or 0),
         total_output_tokens=int(totals.get("total_output_tokens") or 0),
         estimated_total_cost=float(totals.get("estimated_total_cost") or 0.0),
-        breakdown=[
-            UsageBreakdownItem(
-                provider=str(item.get("provider") or ""),
-                model=str(item.get("model") or ""),
-                calls=int(item.get("calls") or 0),
-                input_tokens=int(item.get("input_tokens") or 0),
-                output_tokens=int(item.get("output_tokens") or 0),
-                estimated_cost=float(item.get("estimated_cost") or 0.0),
-            )
-            for item in breakdown_rows
-        ],
+        breakdown=[_to_breakdown_item(item) for item in breakdown_rows],
         pricing_snapshot=pricing_service.get_snapshot_metadata(),
     )
