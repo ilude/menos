@@ -4,11 +4,11 @@ import hashlib
 import io
 import json
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import AnyHttpUrl, BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import AnyHttpUrl, BaseModel, field_validator
 from surrealdb import RecordID
 
 from menos.auth.dependencies import AuthenticatedKeyId
@@ -50,6 +50,20 @@ class IngestRequest(BaseModel):
     """Unified ingest request."""
 
     url: AnyHttpUrl
+    transcript_text: str | None = None
+    transcript_format: Literal["plain"] = "plain"
+    metadata: dict | None = None
+
+    @field_validator("transcript_text")
+    @classmethod
+    def validate_transcript_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("transcript_text must not be empty")
+        if len(value.encode("utf-8")) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="transcript_text exceeds 5 MB")
+        return value
 
 
 class IngestResponse(BaseModel):
@@ -88,6 +102,8 @@ async def ingest_url(
             svc=(youtube_service, metadata_service, minio_storage, surreal_repo),
             orchestrator=orchestrator,
             tags=tags,
+            transcript_text=body.transcript_text,
+            client_metadata=body.metadata,
         )
 
     return await _ingest_web(
@@ -217,6 +233,8 @@ async def _ingest_youtube(
     svc: tuple[YouTubeService, YouTubeMetadataService, MinIOStorage, SurrealDBRepository],
     orchestrator: PipelineOrchestrator,
     tags: list[str] | None = None,
+    transcript_text: str | None = None,
+    client_metadata: dict | None = None,
 ) -> IngestResponse:
     youtube_service, metadata_service, minio_storage, surreal_repo = svc
     existing = await _resolve_existing_youtube(video_id, resource_key, surreal_repo)
@@ -245,6 +263,8 @@ async def _ingest_youtube(
         svc=(youtube_service, metadata_service, minio_storage, surreal_repo),
         orchestrator=orchestrator,
         tags=tags,
+        transcript_text=transcript_text,
+        client_metadata=client_metadata,
     )
 
 
@@ -343,15 +363,23 @@ async def _read_transcript_length(minio_storage: MinIOStorage, file_path: str) -
         return 0
 
 
+def _merge_client_metadata(base: dict, client_metadata: dict | None) -> dict:
+    """Merge client-supplied metadata using menos field names."""
+    if not client_metadata:
+        return base
+    return {**base, **client_metadata}
+
+
 def _build_yt_content_metadata(
     video_id: str,
     resource_key: str,
     transcript_language: str,
     segment_count: int,
     yt_metadata: YouTubeMetadata | None,
+    client_metadata: dict | None = None,
 ) -> dict:
     """Build the SurrealDB content metadata dict for a new YouTube ingest."""
-    return {
+    base = {
         "video_id": video_id,
         "language": transcript_language,
         "segment_count": segment_count,
@@ -370,6 +398,7 @@ def _build_yt_content_metadata(
             ]
         },
     }
+    return _merge_client_metadata(base, client_metadata)
 
 
 async def _ingest_new_youtube(
@@ -379,16 +408,28 @@ async def _ingest_new_youtube(
     svc: tuple[YouTubeService, YouTubeMetadataService, MinIOStorage, SurrealDBRepository],
     orchestrator: PipelineOrchestrator,
     tags: list[str] | None = None,
+    transcript_text: str | None = None,
+    client_metadata: dict | None = None,
 ) -> IngestResponse:
     """Ingest a new YouTube video (transcript + metadata + pipeline)."""
     youtube_service, metadata_service, minio_storage, surreal_repo = svc
-    transcript = youtube_service.fetch_transcript(video_id)
-    transcript_text = transcript.full_text
+    transcript = None
+    transcript_language = "en"
+    segment_count = 0
+    if transcript_text is None:
+        transcript = youtube_service.fetch_transcript(video_id)
+        transcript_text = transcript.full_text
+        stored_transcript_text = transcript.timestamped_text
+        transcript_language = transcript.language
+        segment_count = len(transcript.segments)
+    else:
+        stored_transcript_text = transcript_text
+        segment_count = 1
     file_path = f"youtube/{video_id}/transcript.txt"
 
     file_size = await minio_storage.upload(
         file_path,
-        io.BytesIO(transcript.timestamped_text.encode("utf-8")),
+        io.BytesIO(stored_transcript_text.encode("utf-8")),
         "text/plain",
     )
 
@@ -399,10 +440,14 @@ async def _ingest_new_youtube(
     except Exception as e:
         logger.warning("Failed to fetch YouTube metadata for %s: %s", video_id, e)
 
-    title = yt_metadata.title if yt_metadata else f"YouTube: {video_id}"
-    seg_count = len(transcript.segments)
+    title = (
+        client_metadata.get("title")
+        if client_metadata and client_metadata.get("title")
+        else (yt_metadata.title if yt_metadata else f"YouTube: {video_id}")
+    )
+    seg_count = segment_count
     content_metadata = _build_yt_content_metadata(
-        video_id, resource_key, transcript.language, seg_count, yt_metadata
+        video_id, resource_key, transcript_language, seg_count, yt_metadata, client_metadata
     )
     combined_tags = list(set((yt_metadata.tags if yt_metadata else []) + (tags or [])))
 
@@ -420,13 +465,16 @@ async def _ingest_new_youtube(
     content_id = created.id or video_id
     created_at_str = created.created_at.isoformat() if created.created_at else None
 
-    metadata_dict = _build_minio_metadata(
-        content_id,
-        video_id,
-        title,
-        yt_metadata,
-        (transcript.language, seg_count, len(transcript_text)),
-        (file_size, key_id, created_at_str),
+    metadata_dict = _merge_client_metadata(
+        _build_minio_metadata(
+            content_id,
+            video_id,
+            title,
+            yt_metadata,
+            (transcript_language, seg_count, len(transcript_text)),
+            (file_size, key_id, created_at_str),
+        ),
+        client_metadata,
     )
     await minio_storage.upload(
         f"youtube/{video_id}/metadata.json",

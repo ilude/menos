@@ -652,3 +652,71 @@ def test_resource_key_backfill_uses_recordid(
     from surrealdb import RecordID
     assert isinstance(record_id, RecordID)
     assert str(record_id) == "content:abc123"
+
+
+def test_ingest_youtube_from_local_transcript_skips_server_transcript_fetch(
+    authed_client,
+    mock_surreal_repo,
+    mock_youtube_service,
+    mock_metadata_service,
+    mock_minio_storage,
+    mock_pipeline_orchestrator,
+):
+    mock_metadata_service.fetch_metadata.side_effect = ValueError("metadata unavailable")
+    mock_surreal_repo.create_content.return_value = ContentMetadata(
+        id="content-local",
+        content_type="youtube",
+        title="Client Title",
+        mime_type="text/plain",
+        file_size=100,
+        file_path="youtube/dQw4w9WgXcQ/transcript.txt",
+    )
+    mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-local"))
+
+    response = authed_client.post(
+        "/api/v1/ingest",
+        json={
+            "url": "https://youtu.be/dQw4w9WgXcQ",
+            "transcript_text": "local transcript text",
+            "transcript_format": "plain",
+            "metadata": {"title": "Client Title", "channel_title": "Client Channel"},
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Client Title"
+    assert data["job_id"] == "job-local"
+    mock_youtube_service.fetch_transcript.assert_not_called()
+    first_upload = mock_minio_storage.upload.await_args_list[0]
+    assert first_upload.args[0] == "youtube/dQw4w9WgXcQ/transcript.txt"
+    created = mock_surreal_repo.create_content.await_args[0][0]
+    assert created.metadata["channel_title"] == "Client Channel"
+    mock_pipeline_orchestrator.submit.assert_awaited_once()
+    assert mock_pipeline_orchestrator.submit.await_args.args[1] == "local transcript text"
+
+
+def test_ingest_youtube_rejects_empty_local_transcript(authed_client):
+    response = authed_client.post(
+        "/api/v1/ingest",
+        json={
+            "url": "https://youtu.be/dQw4w9WgXcQ",
+            "transcript_text": "   ",
+            "transcript_format": "plain",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_ingest_youtube_rejects_oversize_local_transcript(authed_client):
+    response = authed_client.post(
+        "/api/v1/ingest",
+        json={
+            "url": "https://youtu.be/dQw4w9WgXcQ",
+            "transcript_text": "x" * (5 * 1024 * 1024 + 1),
+            "transcript_format": "plain",
+        },
+    )
+
+    assert response.status_code == 413
