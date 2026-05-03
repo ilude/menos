@@ -1,0 +1,8 @@
+{
+	email {{ infisical_caddy_email }}
+}
+
+{{ infisical_domain }} {
+	encode zstd gzip
+	reverse_proxy infisical:8080
+}

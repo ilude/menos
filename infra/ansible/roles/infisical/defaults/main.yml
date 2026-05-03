@@ -1,0 +1,32 @@
+---
+# Directory where Infisical compose files and env are rendered.
+infisical_deploy_path: "{{ deploy_path }}/infisical"
+
+# Public hostname for the Infisical UI and API, without scheme.
+infisical_domain: "infisical.example.com"
+
+# Email used by Caddy for ACME registration notices.
+infisical_caddy_email: "admin@example.com"
+
+# Infisical image tag. Pin deliberately; update through a planned upgrade.
+infisical_image: "infisical/infisical:v0.119.0-postgres"
+
+# Caddy image tag. Pin the minor line for reproducible deploys.
+infisical_caddy_image: "caddy:2.8-alpine"
+
+# Dedicated Postgres image. Major/minor is pinned by design.
+infisical_postgres_image: "postgres:16.4-alpine"
+
+# Postgres database name for Infisical.
+infisical_postgres_db: "infisical"
+
+# Postgres user for Infisical.
+infisical_postgres_user: "infisical"
+
+# Docker compose project name.
+infisical_compose_project: "infisical"
+
+# Vault variables required by templates:
+# - vault_infisical_encryption_key: 32-byte or stronger Infisical encryption key from password manager.
+# - vault_infisical_auth_secret: strong random auth secret from password manager.
+# - vault_infisical_postgres_password: strong random password for the dedicated Postgres user.
