@@ -4,6 +4,79 @@
   become: true
 
   tasks:
+    # --- Infisical secret preflight ---
+    - name: Validate menos Infisical selectors
+      ansible.builtin.assert:
+        that:
+          - menos_infisical_project | length > 0
+          - menos_infisical_environment | length > 0
+          - menos_infisical_path | length > 0
+          - menos_infisical_required_keys | length > 0
+          - menos_infisical_machine_client_id | length > 0
+          - menos_infisical_machine_client_secret | length > 0
+        fail_msg: >-
+          Menos Infisical preflight failed. Provide selectors and vault-backed
+          machine identity values using --ask-vault-pass, --vault-password-file,
+          or the documented non-interactive vault flow.
+      delegate_to: localhost
+      become: false
+      tags: [preflight]
+
+    - name: Create local menos secret temp directory
+      ansible.builtin.file:
+        path: "{{ menos_infisical_tmp_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
+    - name: Validate menos runtime secrets from Infisical
+      ansible.builtin.command:
+        cmd: >-
+          uv run python /project/scripts/menos-infisical-env.py
+          --project {{ menos_infisical_project }}
+          --environment {{ menos_infisical_environment }}
+          --path {{ menos_infisical_path }}
+          --api-url {{ menos_infisical_api_url }}
+          --validate
+      environment:
+        INFISICAL_MACHINE_CLIENT_ID: "{{ menos_infisical_machine_client_id }}"
+        INFISICAL_MACHINE_CLIENT_SECRET: "{{ menos_infisical_machine_client_secret }}"
+      delegate_to: localhost
+      become: false
+      register: menos_infisical_validate
+      changed_when: false
+      check_mode: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
+    - name: Render menos runtime env from Infisical
+      ansible.builtin.command:
+        cmd: >-
+          uv run python /project/scripts/menos-infisical-env.py
+          --project {{ menos_infisical_project }}
+          --environment {{ menos_infisical_environment }}
+          --path {{ menos_infisical_path }}
+          --api-url {{ menos_infisical_api_url }}
+          --out {{ menos_infisical_tmp_dir }}/menos.env
+          --write
+      environment:
+        INFISICAL_MACHINE_CLIENT_ID: "{{ menos_infisical_machine_client_id }}"
+        INFISICAL_MACHINE_CLIENT_SECRET: "{{ menos_infisical_machine_client_secret }}"
+      delegate_to: localhost
+      become: false
+      register: menos_infisical_render
+      changed_when: false
+      check_mode: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
     - name: Create deploy directory
       ansible.builtin.file:
         path: "{{ deploy_path }}"
@@ -62,43 +135,71 @@
 
     # --- Pre-flight checks ---
     - name: Configure git for container environment
-      ansible.builtin.shell: |
-        git config --global --add safe.directory /project
-        git config --global core.autocrlf input
+      ansible.builtin.command:
+        argv:
+          - git
+          - config
+          - --global
+          - "{{ item.name }}"
+          - "{{ item.value }}"
+      loop:
+        - name: safe.directory
+          value: /project
+        - name: core.autocrlf
+          value: input
       delegate_to: localhost
       changed_when: false
 
     - name: Detect git directory (handles submodules)
       ansible.builtin.shell: |
+        set -o pipefail
         cd /project
         if [ -f .git ]; then
           # Submodule: read gitdir from .git file
-          gitdir=$(cat .git | sed 's/gitdir: //')
+          gitdir=$(sed 's/gitdir: //' .git)
           echo "/project/$gitdir"
         else
           echo "/project/.git"
         fi
+      args:
+        executable: /bin/bash
       delegate_to: localhost
       register: git_dir_result
       changed_when: false
 
     - name: Get local git SHA
       ansible.builtin.command:
-        cmd: git --git-dir={{ git_dir_result.stdout }} --work-tree=/project rev-parse HEAD
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - rev-parse
+          - HEAD
       delegate_to: localhost
       register: local_git_sha
       changed_when: false
 
     - name: Get local git branch
       ansible.builtin.command:
-        cmd: git --git-dir={{ git_dir_result.stdout }} --work-tree=/project rev-parse --abbrev-ref HEAD
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - rev-parse
+          - --abbrev-ref
+          - HEAD
       delegate_to: localhost
       register: local_git_branch
       changed_when: false
 
     - name: Check for uncommitted changes
       ansible.builtin.command:
-        cmd: git --git-dir={{ git_dir_result.stdout }} --work-tree=/project status --porcelain
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - status
+          - --porcelain
       delegate_to: localhost
       register: git_status
       changed_when: false
@@ -119,7 +220,14 @@
 
     - name: Check ancestry when server has a known SHA
       ansible.builtin.command:
-        cmd: "git --git-dir={{ git_dir_result.stdout }} --work-tree=/project merge-base --is-ancestor {{ server_health.json.git_sha }} {{ local_git_sha.stdout }}"
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - merge-base
+          - --is-ancestor
+          - "{{ server_health.json.git_sha }}"
+          - "{{ local_git_sha.stdout }}"
       delegate_to: localhost
       register: ancestry_check
       changed_when: false
@@ -131,7 +239,7 @@
 
     - name: Sync compose files
       ansible.builtin.copy:
-        src: "../files/menos/"
+        src: /ansible/files/menos/
         dest: "{{ deploy_path }}/"
         mode: "0644"
 
@@ -142,21 +250,28 @@
         mode: "0755"
 
     - name: Sync API menos directory
-      ansible.builtin.shell: |
-        rsync -av --delete \
-          --exclude='__pycache__' \
-          --exclude='*.pyc' \
-          -e "ssh -o StrictHostKeyChecking=no" \
-          /project/api/menos/ {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/api/menos/
+      ansible.builtin.command:
+        argv:
+          - /bin/sh
+          - -c
+          - >-
+            rsync -av --delete --exclude='__pycache__' --exclude='*.pyc'
+            -e "ssh -o StrictHostKeyChecking=no"
+            /project/api/menos/
+            {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/api/menos/
       delegate_to: localhost
       register: rsync_result
       changed_when: rsync_result.stdout_lines | length > 4
 
     - name: Sync API migrations directory
-      ansible.builtin.shell: |
-        rsync -av --delete \
-          -e "ssh -o StrictHostKeyChecking=no" \
-          /project/api/migrations/ {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/api/migrations/
+      ansible.builtin.command:
+        argv:
+          - /bin/sh
+          - -c
+          - >-
+            rsync -av --delete -e "ssh -o StrictHostKeyChecking=no"
+            /project/api/migrations/
+            {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/api/migrations/
       delegate_to: localhost
       register: migrations_rsync_result
       changed_when: migrations_rsync_result.stdout_lines | length > 4
@@ -170,11 +285,36 @@
         - pyproject.toml
         - Dockerfile
 
-    - name: Copy .env file
+    - name: Check existing runtime env
+      ansible.builtin.stat:
+        path: "{{ deploy_path }}/.env"
+      register: menos_existing_env
+
+    - name: Backup existing runtime env
       ansible.builtin.copy:
-        src: "/project/.env"
-        dest: "{{ deploy_path }}/.env"
+        src: "{{ deploy_path }}/.env"
+        dest: "{{ deploy_path }}/.env.bak"
+        remote_src: true
         mode: "0600"
+      when: menos_existing_env.stat.exists
+      no_log: true
+      diff: false
+
+    - name: Install Infisical-rendered runtime env atomically
+      ansible.builtin.copy:
+        src: "{{ menos_infisical_tmp_dir }}/menos.env"
+        dest: "{{ deploy_path }}/.env"
+        mode: "{{ menos_infisical_runtime_env_mode }}"
+      no_log: true
+      diff: false
+
+    - name: Validate compose interpolation before compose actions
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose.yml config
+        chdir: "{{ deploy_path }}"
+      changed_when: false
+      check_mode: false
+      tags: [preflight]
 
     - name: Pull container images
       ansible.builtin.command:
@@ -234,3 +374,13 @@
         - mxbai-embed-large
         - qwen3:latest
       changed_when: true
+
+    - name: Remove local rendered menos env
+      ansible.builtin.file:
+        path: "{{ menos_infisical_tmp_dir }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      no_log: true
+      diff: false
+      tags: [preflight]
